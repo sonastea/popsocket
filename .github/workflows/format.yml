@@ -1,0 +1,35 @@
+name: Go Formatting
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  format:
+    name: Check Go Formatting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23.1
+
+      - name: Install gofumpt
+        run: go install mvdan.cc/gofumpt@latest
+
+      - name: Run gofumpt
+        run: |
+          gofumpt -l -w .
+          git diff --exit-code
+
+      - name: Fail if there are unformatted files
+        if: ${{ failure() }}
+        run: |
+          echo "Code formatting issues found. Please run 'gofumpt -l -w .' locally to fix formatting."
+          exit 1
