@@ -2,50 +2,40 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/sonastea/popsocket/pkg/popsocket"
 )
 
-func main() {
+// Run sets up and starts the PopSocket server.
+func Run(ctx context.Context) error {
 	mux := http.NewServeMux()
 
 	ps, err := popsocket.New(
 		popsocket.WithServeMux(mux),
+    popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
 	)
 	if err != nil {
-		log.Fatalln(err)
+		return fmt.Errorf("failed to create PopSocket: %w", err)
 	}
 
 	mux.HandleFunc("/", ps.ServeWsHandle)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	stopSig := make(chan os.Signal, 1)
-	signal.Notify(stopSig, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-
-	stop := make(chan os.Signal, 1)
-
-	go func() {
-		if err := ps.Start(ctx); err != nil {
-			log.Printf("Server error: %v", err)
-		}
-		close(stop)
-	}()
-
-	select {
-	case <-stopSig:
-		log.Println("Received interrupt signal. Shutting down...")
-		cancel()
-	case <-stop:
-		log.Println("PopSocket server stopped unexpectedly")
+	if err := ps.Start(ctx); err != nil {
+		ps.LogError(fmt.Sprintf("Server error: %v", err))
+		return err
 	}
 
-	<-stop
-	log.Println("PopSocket server shutdown complete")
+	return nil
+}
+
+func main() {
+	ctx := context.Background()
+	if err := Run(ctx); err != nil {
+		log.Fatalln(err)
+		os.Exit(1)
+	}
 }

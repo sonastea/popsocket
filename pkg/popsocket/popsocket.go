@@ -4,17 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
 )
 
-var AllowedOrigins []string
+var (
+	AllowedOrigins []string
+
+	_ PopSocketInterface = (*PopSocket)(nil)
+)
 
 type option func(ps *PopSocket) error
 
@@ -23,9 +29,20 @@ type Client struct {
 	conn *websocket.Conn
 }
 
+type PopSocketInterface interface {
+	LogDebug(string, ...any)
+	LogError(string, ...any)
+	LogInfo(string, ...any)
+	LogWarn(string, ...any)
+
+	Start(ctx context.Context) error
+	ServeWsHandle(w http.ResponseWriter, r *http.Request)
+}
+
 type PopSocket struct {
 	clients    map[*Client]bool
 	httpServer *http.Server
+	logger     *slog.Logger
 	mu         sync.Mutex
 }
 
@@ -36,6 +53,10 @@ type Message struct {
 
 // init initializes default allowed origins for the websocket connections.
 func init() {
+  loadAllowedOrigins()
+}
+
+func loadAllowedOrigins() {
 	allowedOrigins := os.Getenv("ALLOWED_ORIGINS")
 	if allowedOrigins != "" {
 		AllowedOrigins = strings.Split(allowedOrigins, ",")
@@ -55,6 +76,7 @@ func New(opts ...option) (*PopSocket, error) {
 			Addr:    ":80",
 			Handler: http.NewServeMux(),
 		},
+		logger: newLogger(slog.NewJSONHandler(os.Stdout, nil)),
 	}
 
 	// Apply any options passed to configure the PopSocket.
@@ -89,10 +111,13 @@ func WithAddress(addr string) option {
 
 // Start launches the PopSocket HTTP server and manages graceful shutdown.
 func (p *PopSocket) Start(ctx context.Context) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGKILL)
+	defer cancel()
+
 	serverErrors := make(chan error, 1)
 
 	go func() {
-		log.Println("Starting PopSocket server on", p.httpServer.Addr)
+		p.logger.Info(fmt.Sprintf("Starting PopSocket server on %v", p.httpServer.Addr))
 		if err := p.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErrors <- err
 		}
@@ -102,7 +127,7 @@ func (p *PopSocket) Start(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		log.Println("Shutting down PopSocket server...")
+		p.logger.Info(fmt.Sprintf("Shutting down PopSocket server..."))
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		return p.httpServer.Shutdown(shutdownCtx)
@@ -111,12 +136,53 @@ func (p *PopSocket) Start(ctx context.Context) error {
 	}
 }
 
+// LogDebug logs a debug message to the underlying slog logger.
+func (p *PopSocket) LogDebug(msg string, args ...any) {
+	p.logger.Debug(msg, args...)
+}
+
+// LogError logs an error message to the underlying slog logger.
+func (p *PopSocket) LogError(msg string, args ...any) {
+	p.logger.Error(msg, args...)
+}
+
+// LogInfo logs an info message to the underlying slog logger.
+func (p *PopSocket) LogInfo(msg string, args ...any) {
+	p.logger.Info(msg, args...)
+}
+
+// LogWarn logs a warning message to the underlying slog logger.
+func (p *PopSocket) LogWarn(msg string, args ...any) {
+	p.logger.Warn(msg, args...)
+}
+
+// addClient safely adds a client to the clients map.
+func (p *PopSocket) addClient(client *Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clients[client] = true
+}
+
+// removeClient safely removes a client from the clients map.
+func (p *PopSocket) removeClient(client *Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.clients, client)
+}
+
+// getClientCount returns the number of connected clients.
+func (p *PopSocket) totalClients() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.clients)
+}
+
 // broadcastMessage sends a message to all connected clients.
 func (p *PopSocket) broadcastMessage(msg []byte) {
 	for client := range p.clients {
 		err := client.conn.Write(context.Background(), websocket.MessageText, msg)
 		if err != nil {
-			log.Printf("Failed to send message to client %s: %v", client.id, err)
+			p.LogWarn("Failed to send message to client %s: %v", client.id, err)
 			client.conn.CloseNow()
 			delete(p.clients, client)
 		}
@@ -140,7 +206,7 @@ func (p *PopSocket) startBroadcasting(ctx context.Context) {
 
 			msg, err := json.Marshal(message)
 			if err != nil {
-				log.Printf("Failed to marshal message: %v", err)
+				p.LogWarn("Failed to marshal message: %v", err)
 				return
 			}
 
@@ -155,7 +221,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		OriginPatterns: AllowedOrigins,
 	})
 	if err != nil {
-		log.Println(err)
+		p.LogError(err.Error())
 		return
 	}
 
@@ -164,15 +230,16 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		id:   r.Header.Get("Sec-Websocket-Key"),
 	}
 
-	p.mu.Lock()
-	p.clients[client] = true
-	p.mu.Unlock()
-	log.Println("Joined size of connection pool: ", len(p.clients))
+  p.addClient(client)
+	clients := p.totalClients()
+  p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", clients))
 
 	defer func() {
-		conn.CloseNow()
-		delete(p.clients, client)
-		log.Println(client.id, "has disconnected.", "Remaining size of connection pool: ", len(p.clients))
+    p.removeClient(client)
+    clients = p.totalClients()
+
+		conn.Close(websocket.StatusNormalClosure, "")
+		p.LogInfo(fmt.Sprintf("%s has disconnected. Remaining size of connection pool: %v", client.id, clients))
 	}()
 
 	for {
@@ -186,7 +253,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 			Content: "",
 		})
 		if err != nil {
-			log.Println(err)
+			p.LogError(err.Error())
 			return
 		}
 
