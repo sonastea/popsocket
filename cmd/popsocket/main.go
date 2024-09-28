@@ -16,7 +16,7 @@ func Run(ctx context.Context) error {
 
 	ps, err := popsocket.New(
 		popsocket.WithServeMux(mux),
-    popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
+		popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create PopSocket: %w", err)

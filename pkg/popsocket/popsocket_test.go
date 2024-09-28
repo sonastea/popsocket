@@ -3,7 +3,9 @@ package popsocket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,8 @@ import (
 	"github.com/coder/websocket"
 )
 
+// TestLoadAllowedOrigins loads the env variable `ALLOWED_ORIGINS` and
+// sanitizes/returns the set or default values.
 func TestLoadAllowedOrigins(t *testing.T) {
 	t.Parallel()
 
@@ -23,27 +27,27 @@ func TestLoadAllowedOrigins(t *testing.T) {
 	defer os.Setenv("ALLOWED_ORIGINS", originalAllowedOrigins) // Restore original value after test
 
 	tests := []struct {
-		name           string
+		name            string
 		allowed         string
 		expectedOrigins []string
 	}{
 		{
-			name:           "No ALLOWED_allowed set",
+			name:            "No ALLOWED_allowed set",
 			allowed:         "",
 			expectedOrigins: []string{"localhost:3000"},
 		},
 		{
-			name:           "Single origin set",
+			name:            "Single origin set",
 			allowed:         "example.com",
 			expectedOrigins: []string{"example.com"},
 		},
 		{
-			name:           "Multiple allowed set",
+			name:            "Multiple allowed set",
 			allowed:         "example.com, kpoppop.com, localhost:8080",
 			expectedOrigins: []string{"example.com", "kpoppop.com", "localhost:8080"},
 		},
 		{
-			name:           "Origins with extra spaces",
+			name:            "Origins with extra spaces",
 			allowed:         " example.com , kpoppop.com , localhost:8080 ",
 			expectedOrigins: []string{"example.com", "kpoppop.com", "localhost:8080"},
 		},
@@ -60,14 +64,60 @@ func TestLoadAllowedOrigins(t *testing.T) {
 			}
 		})
 	}
-
 }
 
+// TestLoggingFunctions calls PopSocket's methods which are wrappers
+// of slog's logging methods.
+func TestLoggingFunctions(t *testing.T) {
+	ps, err := New()
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		log      func(msg string, args ...any)
+		logLevel slog.Level
+	}{
+		{"LogDebug", ps.LogDebug, slog.LevelDebug},
+		{"LogInfo", ps.LogInfo, slog.LevelInfo},
+		{"LogError", ps.LogError, slog.LevelError},
+		{"LogWarn", ps.LogWarn, slog.LevelWarn},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				buf      strings.Builder
+				logEntry map[string]interface{}
+			)
+
+			ps.logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			tt.log("test", "foo", "bar")
+
+			err := json.Unmarshal([]byte(buf.String()), &logEntry)
+			if err != nil {
+				t.Fatalf("Failed to parse JSON log output: %v", err)
+			}
+
+			if logEntry["level"] != tt.logLevel.String() {
+				t.Errorf("Expected log level %s, but got: %s", tt.logLevel, logEntry["level"])
+			}
+			if logEntry["msg"] != "test" {
+				t.Errorf("Expected message 'Test message', but got: %s", logEntry["msg"])
+			}
+			if logEntry["foo"] != "bar" {
+				t.Errorf("Expected 'key' field to be 'value', but got: %s", logEntry["key"])
+			}
+		})
+	}
+}
+
+// TestNew ensures New() returns a valid PopSocket instance.
 func TestNew(t *testing.T) {
 	t.Parallel()
 
 	ps, err := New()
-
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -89,12 +139,39 @@ func TestNew(t *testing.T) {
 	}
 }
 
+// TestNew_Options ensures New() can handle passed options
+// and return a valid instance of PopSocket or error.
+func TestNew_Options(t *testing.T) {
+	errMsg := fmt.Sprintf("mock option error")
+	optionsWithError := func(ps *PopSocket) error {
+		return errors.New(errMsg)
+	}
+
+	ps, err := New(optionsWithError)
+	if err == nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	if err == nil {
+		t.Fatalf("Expected error, but got none")
+	}
+
+	if err.Error() != errMsg {
+		t.Fatalf("Expected error message '%s', but got '%s'", errMsg, err.Error())
+	}
+
+	if ps != nil {
+		t.Fatalf("Expected PopSocket instance to be nil, but got %v", ps)
+	}
+}
+
+// TestWithAddress ensures that the PopSocket instance
+// sets and uses the specified address in httpServer.
 func TestWithAddress(t *testing.T) {
 	t.Parallel()
 
 	addr := ":8080"
 	ps, err := New(WithAddress(addr))
-
 	if err != nil {
 		t.Fatalf("New() with WithAddress failed: %v", err)
 	}
@@ -104,6 +181,7 @@ func TestWithAddress(t *testing.T) {
 	}
 }
 
+// TestWithServeMux ensures that PopSocket's handler is set to use the provided ServeMux.
 func TestWithServeMux(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +195,8 @@ func TestWithServeMux(t *testing.T) {
 	}
 }
 
+// TestServeWsHandle ensures that client connections  are correctly managed
+// and messages are processed from and to.
 func TestServeWsHandle(t *testing.T) {
 	t.Parallel()
 
@@ -177,6 +257,7 @@ func TestServeWsHandle(t *testing.T) {
 	}
 }
 
+// TestStart runs Start() to make sure the server starts and handles shutdown properly.
 func TestStart(t *testing.T) {
 	t.Parallel()
 
@@ -210,6 +291,8 @@ func TestStart(t *testing.T) {
 	}
 }
 
+// TestStartWithFailure runs Start() with an error (occupied port) to determine if
+// the server handles and returns an appropriate error.
 func TestStartWithFailure(t *testing.T) {
 	t.Parallel()
 
@@ -231,7 +314,6 @@ func TestStartWithFailure(t *testing.T) {
 		errCh <- ps.Start(ctx)
 	}()
 
-	// Wait for the server to start or timeout
 	select {
 	case err := <-errCh:
 		if err == nil {

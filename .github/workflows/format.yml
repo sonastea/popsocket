@@ -28,7 +28,7 @@ jobs:
           gofumpt -l -w .
           git diff --exit-code
 
-      - name: Fail if there are unformatted files
+      - name: Prompt for fixes and halt workflow on formatting issues
         if: ${{ failure() }}
         run: |
           echo "Code formatting issues found. Please run 'gofumpt -l -w .' locally to fix formatting."

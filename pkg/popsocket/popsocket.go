@@ -53,7 +53,7 @@ type Message struct {
 
 // init initializes default allowed origins for the websocket connections.
 func init() {
-  loadAllowedOrigins()
+	loadAllowedOrigins()
 }
 
 func loadAllowedOrigins() {
@@ -230,13 +230,13 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		id:   r.Header.Get("Sec-Websocket-Key"),
 	}
 
-  p.addClient(client)
+	p.addClient(client)
 	clients := p.totalClients()
-  p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", clients))
+	p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", clients))
 
 	defer func() {
-    p.removeClient(client)
-    clients = p.totalClients()
+		p.removeClient(client)
+		clients = p.totalClients()
 
 		conn.Close(websocket.StatusNormalClosure, "")
 		p.LogInfo(fmt.Sprintf("%s has disconnected. Remaining size of connection pool: %v", client.id, clients))

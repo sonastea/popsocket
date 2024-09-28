@@ -10,6 +10,7 @@ import (
 	"github.com/coder/websocket"
 )
 
+// TestRun ensures popsocket's cmd entry point properly runs
 func TestRun(t *testing.T) {
 	os.Setenv("POPSOCKET_ADDR", ":8989")
 

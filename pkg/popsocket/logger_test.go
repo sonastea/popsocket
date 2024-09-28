@@ -2,10 +2,9 @@ package popsocket
 
 import (
 	"log/slog"
+	"os"
 	"sync"
 	"testing"
-
-	"os"
 )
 
 // TestNewLoggerSingleton ensures that NewLogger returns a singleton instance.
@@ -44,4 +43,3 @@ func TestNewLoggerConcurrency(t *testing.T) {
 		}
 	}
 }
-
