@@ -43,7 +43,7 @@ type PopSocket struct {
 	clients    map[*Client]bool
 	httpServer *http.Server
 	logger     *slog.Logger
-	mu         sync.Mutex
+	mu         sync.RWMutex
 }
 
 type Message struct {
@@ -172,8 +172,8 @@ func (p *PopSocket) removeClient(client *Client) {
 
 // getClientCount returns the number of connected clients.
 func (p *PopSocket) totalClients() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return len(p.clients)
 }
 
@@ -198,8 +198,7 @@ func (p *PopSocket) startBroadcasting(ctx context.Context) {
 				return
 			}
 
-			p.mu.Lock()
-			defer p.mu.Unlock()
+			p.mu.RLock()
 			for client := range p.clients {
 				err := client.conn.Write(ctx, websocket.MessageText, msg)
 				if err != nil {
@@ -208,6 +207,7 @@ func (p *PopSocket) startBroadcasting(ctx context.Context) {
 					delete(p.clients, client)
 				}
 			}
+			p.mu.RUnlock()
 		}
 	}
 }
