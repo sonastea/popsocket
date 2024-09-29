@@ -1,6 +1,7 @@
 package popsocket
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -69,6 +70,8 @@ func TestLoadAllowedOrigins(t *testing.T) {
 // TestLoggingFunctions calls PopSocket's methods which are wrappers
 // of slog's logging methods.
 func TestLoggingFunctions(t *testing.T) {
+	t.Parallel()
+
 	ps, err := New()
 	if err != nil {
 		t.Fatalf("New PopSocket failed: %v", err)
@@ -142,6 +145,8 @@ func TestNew(t *testing.T) {
 // TestNew_Options ensures New() can handle passed options
 // and return a valid instance of PopSocket or error.
 func TestNew_Options(t *testing.T) {
+	t.Parallel()
+
 	errMsg := fmt.Sprintf("mock option error")
 	optionsWithError := func(ps *PopSocket) error {
 		return errors.New(errMsg)
@@ -195,73 +200,98 @@ func TestWithServeMux(t *testing.T) {
 	}
 }
 
-// TestServeWsHandle ensures that client connections  are correctly managed
+// TestServeWsHandle ensures that client connections are correctly managed
 // and messages are processed from and to.
 func TestServeWsHandle(t *testing.T) {
 	t.Parallel()
 
-	ps, _ := New()
+	ps, err := New()
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
+
 	server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
 	defer server.Close()
 
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	t.Run("Websocket connection dialed", func(t *testing.T) {
+		wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
-	if err != nil {
-		t.Fatalf("Failed to connect to WebSocket server: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+		conn, _, err := websocket.Dial(ctx, wsUrl, nil)
+		if err != nil {
+			t.Fatalf("Failed to connect to WebSocket server: %v", err)
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
 
-	time.Sleep(100 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 
-	ps.mu.Lock()
-	clients := len(ps.clients)
-	ps.mu.Unlock()
+		clients := ps.totalClients()
 
-	if clients != 1 {
-		t.Errorf("Expected 1 client, got %d", clients)
-	}
+		if clients != 1 {
+			t.Errorf("Expected 1 client, got %d", clients)
+		}
 
-	err = conn.Write(ctx, websocket.MessageText, []byte("Hello, server!"))
-	if err != nil {
-		t.Fatalf("Failed to send message to server: %v", err)
-	}
+		err = conn.Write(ctx, websocket.MessageText, []byte("Hello, server!"))
+		if err != nil {
+			t.Fatalf("Failed to send message to server: %v", err)
+		}
 
-	_, message, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("Failed to read message from server: %v", err)
-	}
+		_, message, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("Failed to read message from server: %v", err)
+		}
 
-	var msg Message
-	err = json.Unmarshal(message, &msg)
-	if err != nil {
-		t.Fatalf("Failed to unmarshal message: %v", err)
-	}
+		var msg Message
+		err = json.Unmarshal(message, &msg)
+		if err != nil {
+			t.Fatalf("Failed to unmarshal message: %v", err)
+		}
 
-	if msg.Event != "conversations" {
-		t.Errorf("Expected event 'conversations', got '%s'", msg.Event)
-	}
+		if msg.Event != "conversations" {
+			t.Errorf("Expected event 'conversations', got '%s'", msg.Event)
+		}
 
-	conn.Close(websocket.StatusNormalClosure, "")
-	time.Sleep(100 * time.Millisecond)
+		conn.Close(websocket.StatusNormalClosure, "")
+		time.Sleep(100 * time.Millisecond)
 
-	ps.mu.Lock()
-	clients = len(ps.clients)
-	ps.mu.Unlock()
+		clients = ps.totalClients()
 
-	if clients != 0 {
-		t.Errorf("Expected 0 clients after closing connection, got %d", clients)
-	}
+		if clients != 0 {
+			t.Errorf("Expected 0 clients after closing connection, got %d", clients)
+		}
+	})
+
+	t.Run("Websocket accept errored", func(t *testing.T) {
+		origin := "local.test"
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Connection", "Upgrade")
+		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+		req.Header.Set("Sec-WebSocket-Version", "13")
+		req.Header.Set("Origin", origin)
+
+		rec := httptest.NewRecorder()
+		ps.ServeWsHandle(rec, req)
+
+		if !bytes.Contains(rec.Body.Bytes(), []byte(origin)) {
+			t.Errorf("Received body should have `local.test`, got %s", rec.Body.String())
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("Expected HTTP %d status code, got %d", http.StatusForbidden, rec.Code)
+		}
+	})
 }
 
 // TestStart runs Start() to make sure the server starts and handles shutdown properly.
 func TestStart(t *testing.T) {
 	t.Parallel()
 
-	ps, _ := New(WithAddress(":0"))
+	ps, err := New(WithAddress(":0"))
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -291,6 +321,136 @@ func TestStart(t *testing.T) {
 	}
 }
 
+// TestStartBroadcasting ensures connected clients are receiving messages from the PopSocket server.
+func TestStartBroadcasting(t *testing.T) {
+	t.Parallel()
+
+	ps, err := New()
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
+	defer server.Close()
+
+	wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go ps.startBroadcasting(ctx)
+
+	conn, _, err := websocket.Dial(ctx, wsUrl, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect to WebSocket server: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	time.Sleep(100 * time.Millisecond)
+
+	toClient := make(chan []byte)
+	errChan := make(chan error)
+
+	go func() {
+		_, msg, err := conn.Read(ctx)
+		if err != nil {
+			errChan <- err
+		} else {
+			toClient <- msg
+		}
+	}()
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("Failed to read message from server: %v", err)
+	case msg := <-toClient:
+		fmt.Printf("Received message: %s\n", string(msg))
+	case <-ctx.Done():
+		t.Fatalf("Test timed out waiting for a message")
+	}
+}
+
+/* // TestBroadcastMessage ensures the provided message is sent to
+// connected clients and any errors from sending is handled
+func TestBroadcastMessage(t *testing.T) {
+	t.Parallel()
+
+	ps, err := New()
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
+	defer server.Close()
+
+	wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	t.Run("Message sent successfully", func(t *testing.T) {
+		conn, _, err := websocket.Dial(ctx, wsUrl, nil)
+		if err != nil {
+			t.Fatalf("Failed to connect to WebSocket server: %v", err)
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+
+		time.Sleep(100 * time.Millisecond)
+
+		message := &Message{Event: "test", Content: "received"}
+		msg, err := json.Marshal(message)
+		ps.broadcastMessage(msg)
+
+		_, recvMsg, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("Failed to read message from server: %v", err)
+		}
+
+		if !bytes.Equal(msg, recvMsg) {
+			t.Fatalf("Expected received messaged []byte to be %v, got %v", msg, recvMsg)
+		}
+	})
+
+	t.Run("Message sent unsuccessfully", func(t *testing.T) {
+		conn, _, err := websocket.Dial(ctx, wsUrl, nil)
+		if err != nil {
+			t.Fatalf("Failed to connect to WebSocket server: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+		conn.Close(websocket.StatusNormalClosure, "Simulating client closure")
+		time.Sleep(100 * time.Millisecond)
+
+		testMessage := &Message{
+			Event:   "test",
+			Content: "nope",
+		}
+		messageBytes, err := json.Marshal(testMessage)
+
+		ps.broadcastMessage(messageBytes)
+
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
+
+		if len(ps.clients) != 0 {
+			t.Fatalf("Expected 0 clients after broadcastMessage due to closed connection, but got %d", len(ps.clients))
+		}
+
+		/* message := &Message{Event: "test", Content: "nope"}
+		msg, err := json.Marshal(message)
+		ps.broadcastMessage(msg)
+
+		_, _, err = conn.Read(ctx)
+		if err == nil {
+			t.Fatal("Expected an error due to early closed websocket connection, but got nil")
+		}
+
+		expected := "failed to get reader: use of closed network connection"
+		if err.Error() != expected {
+			t.Fatalf("Expected error to be `%v`, got `%v`", expected, err.Error())
+		}
+	})
+} */
+
 // TestStartWithFailure runs Start() with an error (occupied port) to determine if
 // the server handles and returns an appropriate error.
 func TestStartWithFailure(t *testing.T) {
@@ -305,6 +465,9 @@ func TestStartWithFailure(t *testing.T) {
 
 	// Now create a PopSocket instance trying to use the occupied port
 	ps, _ := New(WithAddress(fmt.Sprintf(":%d", port)))
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

@@ -12,6 +12,8 @@ import (
 
 // TestRun ensures popsocket's cmd entry point properly runs
 func TestRun(t *testing.T) {
+	t.Parallel()
+
 	os.Setenv("POPSOCKET_ADDR", ":8989")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

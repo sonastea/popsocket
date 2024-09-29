@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/valkey-io/valkey-go"
 )
 
 // TestLoadValkeyInitAddress_WithValue tests that the function correctly
@@ -64,7 +65,9 @@ func TestNewValkeyService(t *testing.T) {
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	_, err := newValkeyService()
+	os.Setenv("REDIS_URL", s.Addr())
+
+	_, err := newValkeyService(valkey.ClientOption{DisableCache: true})
 	if err != nil {
 		t.Fatalf("New valkey service failed %v", err)
 	}

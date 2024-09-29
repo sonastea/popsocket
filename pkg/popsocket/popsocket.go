@@ -177,18 +177,6 @@ func (p *PopSocket) totalClients() int {
 	return len(p.clients)
 }
 
-// broadcastMessage sends a message to all connected clients.
-func (p *PopSocket) broadcastMessage(msg []byte) {
-	for client := range p.clients {
-		err := client.conn.Write(context.Background(), websocket.MessageText, msg)
-		if err != nil {
-			p.LogWarn("Failed to send message to client %s: %v", client.id, err)
-			client.conn.CloseNow()
-			delete(p.clients, client)
-		}
-	}
-}
-
 // startBroadcasting periodically sends a message to all connected clients every second.
 func (p *PopSocket) startBroadcasting(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
@@ -210,7 +198,16 @@ func (p *PopSocket) startBroadcasting(ctx context.Context) {
 				return
 			}
 
-			p.broadcastMessage(msg)
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			for client := range p.clients {
+				err := client.conn.Write(ctx, websocket.MessageText, msg)
+				if err != nil {
+					p.LogWarn("Failed to send message to client %s: %v", client.id, err)
+					client.conn.CloseNow()
+					delete(p.clients, client)
+				}
+			}
 		}
 	}
 }
@@ -248,14 +245,11 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		msg, err := json.Marshal(Message{
+		// temporarily don't handle error, still need to get the conversations
+		msg, _ := json.Marshal(Message{
 			Event:   "conversations",
 			Content: "",
 		})
-		if err != nil {
-			p.LogError(err.Error())
-			return
-		}
 
 		conn.Write(r.Context(), websocket.MessageText, msg)
 	}

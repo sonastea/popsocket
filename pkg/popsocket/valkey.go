@@ -26,9 +26,20 @@ func loadValkeyInitAddress() []string {
 	return addrs
 }
 
-func newValkeyService() (*ValkeyService, error) {
+func newValkeyService(opts ...valkey.ClientOption) (*ValkeyService, error) {
 	addr := loadValkeyInitAddress()
-	client, err := valkey.NewClient(valkey.ClientOption{InitAddress: addr})
+
+	options := valkey.ClientOption{
+		InitAddress: addr,
+	}
+
+	for _, opt := range opts {
+		if opt.DisableCache {
+			options.DisableCache = true
+		}
+	}
+
+	client, err := valkey.NewClient(options)
 	if err != nil {
 		return nil, err
 	}

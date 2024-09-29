@@ -9,6 +9,8 @@ import (
 
 // TestNewLoggerSingleton ensures that NewLogger returns a singleton instance.
 func TestNewLoggerSingleton(t *testing.T) {
+	t.Parallel()
+
 	handler := slog.NewJSONHandler(os.Stdout, nil)
 
 	logger1 := newLogger(handler)
@@ -21,6 +23,8 @@ func TestNewLoggerSingleton(t *testing.T) {
 
 // TestNewLoggerConcurrency ensures thread safety by creating the logger only once even with concurrent access.
 func TestNewLoggerConcurrency(t *testing.T) {
+	t.Parallel()
+
 	handler := slog.NewTextHandler(os.Stdout, nil)
 	var wg sync.WaitGroup
 
