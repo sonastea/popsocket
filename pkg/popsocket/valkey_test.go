@@ -59,27 +59,27 @@ func TestLoadValkeyInitAddress_WithoutValue(t *testing.T) {
 	}
 }
 
-// TestNewValkeyService tests that newValkeyService successfully creates
-// a ValkeyService instance when a valid Redis server is available.
-func TestNewValkeyService(t *testing.T) {
+// TestNewValkeyClient tests that NewValkeyClient successfully creates
+// a ValkeyClient instance when a valid Redis server is available.
+func TestNewValkeyClient(t *testing.T) {
 	s := miniredis.RunT(t)
 	defer s.Close()
 
 	os.Setenv("REDIS_URL", s.Addr())
 
-	_, err := newValkeyService(valkey.ClientOption{DisableCache: true})
+	_, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
-		t.Fatalf("New valkey service failed %v", err)
+		t.Fatalf("New valkey client failed %v", err)
 	}
 }
 
-// TestNewValkeyService_ExpectFail test that newValkeyService returns
+// TestNewValkeyClient_ExpectFail test that NewValkeyClient returns
 // an error when it cannot connect to the specified Redis server.
-func TestNewValkeyService_ExpectFail(t *testing.T) {
+func TestNewValkeyClient_ExpectFail(t *testing.T) {
 	os.Setenv("REDIS_URL", "127.0.0.1:6380")
 
-	_, err := newValkeyService()
+	_, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err == nil {
-		t.Fatalf("New valkey service expected to fail: %v \n", err)
+		t.Fatalf("New valkey client expected to fail: %v \n", err)
 	}
 }

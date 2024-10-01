@@ -16,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
+	"github.com/valkey-io/valkey-go"
 )
 
 // TestLoadAllowedOrigins loads the env variable `ALLOWED_ORIGINS` and
@@ -72,7 +74,17 @@ func TestLoadAllowedOrigins(t *testing.T) {
 func TestLoggingFunctions(t *testing.T) {
 	t.Parallel()
 
-	ps, err := New()
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	ps, err := New(valkey)
 	if err != nil {
 		t.Fatalf("New PopSocket failed: %v", err)
 	}
@@ -120,7 +132,16 @@ func TestLoggingFunctions(t *testing.T) {
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	ps, err := New()
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	ps, err := New(valkey)
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -147,12 +168,20 @@ func TestNew(t *testing.T) {
 func TestNew_Options(t *testing.T) {
 	t.Parallel()
 
+	s := miniredis.RunT(t)
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
 	errMsg := fmt.Sprintf("mock option error")
 	optionsWithError := func(ps *PopSocket) error {
 		return errors.New(errMsg)
 	}
 
-	ps, err := New(optionsWithError)
+	ps, err := New(valkey, optionsWithError)
 	if err == nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -175,8 +204,18 @@ func TestNew_Options(t *testing.T) {
 func TestWithAddress(t *testing.T) {
 	t.Parallel()
 
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
 	addr := ":8080"
-	ps, err := New(WithAddress(addr))
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	ps, err := New(valkey, WithAddress(addr))
 	if err != nil {
 		t.Fatalf("New() with WithAddress failed: %v", err)
 	}
@@ -190,8 +229,18 @@ func TestWithAddress(t *testing.T) {
 func TestWithServeMux(t *testing.T) {
 	t.Parallel()
 
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
 	customMux := http.NewServeMux()
-	ps, err := New(WithServeMux(customMux))
+	ps, err := New(valkey, WithServeMux(customMux))
 	if err != nil {
 		t.Fatalf("New() with WithServeMux failed: %v", err)
 	}
@@ -205,7 +254,17 @@ func TestWithServeMux(t *testing.T) {
 func TestServeWsHandle(t *testing.T) {
 	t.Parallel()
 
-	ps, err := New()
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	ps, err := New(valkey)
 	if err != nil {
 		t.Fatalf("New PopSocket failed: %v", err)
 	}
@@ -233,24 +292,26 @@ func TestServeWsHandle(t *testing.T) {
 			t.Errorf("Expected 1 client, got %d", clients)
 		}
 
-		err = conn.Write(ctx, websocket.MessageText, []byte("Hello, server!"))
+		psMessage := Message{Event: MessageType.Connect, Content: "ping!"}
+		m, err := json.Marshal(psMessage)
+		err = conn.Write(ctx, websocket.MessageText, m)
 		if err != nil {
 			t.Fatalf("Failed to send message to server: %v", err)
 		}
 
-		_, message, err := conn.Read(ctx)
+		_, msg, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("Failed to read message from server: %v", err)
 		}
 
-		var msg Message
-		err = json.Unmarshal(message, &msg)
+		var message Message
+		err = json.Unmarshal(msg, &message)
 		if err != nil {
-			t.Fatalf("Failed to unmarshal message: %v", err)
+			t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
 		}
 
-		if msg.Event != "conversations" {
-			t.Errorf("Expected event 'conversations', got '%s'", msg.Event)
+		if message.Event != MessageType.Connect {
+			t.Errorf("Expected event '%s', got '%s'", MessageType.Connect, message.Event)
 		}
 
 		conn.Close(websocket.StatusNormalClosure, "")
@@ -288,7 +349,17 @@ func TestServeWsHandle(t *testing.T) {
 func TestStart(t *testing.T) {
 	t.Parallel()
 
-	ps, err := New(WithAddress(":0"))
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	ps, err := New(valkey, WithAddress(":0"))
 	if err != nil {
 		t.Fatalf("New PopSocket failed: %v", err)
 	}
@@ -321,54 +392,6 @@ func TestStart(t *testing.T) {
 	}
 }
 
-// TestStartBroadcasting ensures connected clients are receiving messages from the PopSocket server.
-func TestStartBroadcasting(t *testing.T) {
-	t.Parallel()
-
-	ps, err := New()
-	if err != nil {
-		t.Fatalf("New PopSocket failed: %v", err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
-	defer server.Close()
-
-	wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go ps.startBroadcasting(ctx)
-
-	conn, _, err := websocket.Dial(ctx, wsUrl, nil)
-	if err != nil {
-		t.Fatalf("Failed to connect to WebSocket server: %v", err)
-	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
-
-	time.Sleep(100 * time.Millisecond)
-
-	toClient := make(chan []byte)
-	errChan := make(chan error)
-
-	go func() {
-		_, msg, err := conn.Read(ctx)
-		if err != nil {
-			errChan <- err
-		} else {
-			toClient <- msg
-		}
-	}()
-
-	select {
-	case err := <-errChan:
-		t.Fatalf("Failed to read message from server: %v", err)
-	case msg := <-toClient:
-		fmt.Printf("Received message: %s\n", string(msg))
-	case <-ctx.Done():
-		t.Fatalf("Test timed out waiting for a message")
-	}
-}
-
 // TestStartWithFailure runs Start() with an error (occupied port) to determine if
 // the server handles and returns an appropriate error.
 func TestStartWithFailure(t *testing.T) {
@@ -381,8 +404,18 @@ func TestStartWithFailure(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	defer listener.Close()
 
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
 	// Now create a PopSocket instance trying to use the occupied port
-	ps, _ := New(WithAddress(fmt.Sprintf(":%d", port)))
+	ps, _ := New(valkey, WithAddress(fmt.Sprintf(":%d", port)))
 	if err != nil {
 		t.Fatalf("New PopSocket failed: %v", err)
 	}

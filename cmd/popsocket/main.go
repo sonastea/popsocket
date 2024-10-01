@@ -8,18 +8,20 @@ import (
 	"os"
 
 	"github.com/sonastea/popsocket/pkg/popsocket"
+	"github.com/valkey-io/valkey-go"
 )
 
 // Run sets up and starts the PopSocket server.
-func Run(ctx context.Context) error {
+func Run(ctx context.Context, valkey valkey.Client) error {
 	mux := http.NewServeMux()
 
 	ps, err := popsocket.New(
-		popsocket.WithServeMux(mux),
+    valkey,
+    popsocket.WithServeMux(mux),
 		popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create PopSocket: %w", err)
+		return fmt.Errorf("Failed to create PopSocket: %w", err)
 	}
 
 	mux.HandleFunc("/", ps.ServeWsHandle)
@@ -34,7 +36,13 @@ func Run(ctx context.Context) error {
 
 func main() {
 	ctx := context.Background()
-	if err := Run(ctx); err != nil {
+
+  valkey, err := popsocket.NewValkeyClient()
+  if err != nil {
+    log.Printf("Failed to created valkey client: %+v", err)
+  }
+
+	if err := Run(ctx, valkey); err != nil {
 		log.Fatalln(err)
 		os.Exit(1)
 	}

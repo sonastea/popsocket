@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/sonastea/popsocket/pkg/popsocket"
+	"github.com/valkey-io/valkey-go"
 )
 
 // TestRun ensures popsocket's cmd entry point properly runs
@@ -20,9 +23,13 @@ func TestRun(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
+	valkey, err := popsocket.NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
 
 	go func() {
-		errCh <- Run(ctx)
+		errCh <- Run(ctx, valkey)
 	}()
 
 	time.Sleep(500 * time.Millisecond)
@@ -39,19 +46,21 @@ func TestRun(t *testing.T) {
 		t.Fatal("Expected a valid WebSocket connection, got nil")
 	}
 
-	err = wsConn.Write(ctx, websocket.MessageText, []byte("Hello, server!"))
+	psMessage := popsocket.Message{Event: popsocket.MessageType.Connect, Content: "ping!"}
+	m, err := json.Marshal(psMessage)
+	err = wsConn.Write(ctx, websocket.MessageText, m)
 	if err != nil {
 		t.Fatalf("Failed to send message to WebSocket server: %v", err)
 	}
 
-	_, message, err := wsConn.Read(ctx)
+	_, msg, err := wsConn.Read(ctx)
 	if err != nil {
 		t.Fatalf("Failed to read message from WebSocket server: %v", err)
 	}
 
-	expectedMessage := "{\"event\":\"conversations\",\"content\":\"\"}"
-	if string(message) != expectedMessage {
-		t.Errorf("Expected message '%s', got '%s'", expectedMessage, message)
+	expectedMessage := `{"event":"CONNECT","content":"pong!"}`
+	if string(msg) != expectedMessage {
+		t.Errorf("Expected message '%s', got '%s'", expectedMessage, msg)
 	}
 
 	cancel()

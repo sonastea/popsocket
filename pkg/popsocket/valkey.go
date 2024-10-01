@@ -7,10 +7,8 @@ import (
 	"github.com/valkey-io/valkey-go"
 )
 
-type ValkeyService struct {
-	client *valkey.Client
-}
-
+// loadValkeyInitAddress loads a []string from the REDIS_URL env variable and provides the
+// default of []string{"127.0.0.1:6379"} when nothing is set.
 func loadValkeyInitAddress() []string {
 	addr := os.Getenv("REDIS_URL")
 	if addr == "" {
@@ -26,7 +24,8 @@ func loadValkeyInitAddress() []string {
 	return addrs
 }
 
-func newValkeyService(opts ...valkey.ClientOption) (*ValkeyService, error) {
+// NewValkeyClient returns an instance of ValkeyClient with the provided options.
+func NewValkeyClient(opts ...valkey.ClientOption) (valkey.Client, error) {
 	addr := loadValkeyInitAddress()
 
 	options := valkey.ClientOption{
@@ -44,7 +43,5 @@ func newValkeyService(opts ...valkey.ClientOption) (*ValkeyService, error) {
 		return nil, err
 	}
 
-	return &ValkeyService{
-		&client,
-	}, nil
+	return client, nil
 }
