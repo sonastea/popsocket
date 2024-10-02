@@ -27,8 +27,8 @@ const (
 	// Time allowed to read the next response from the client.
 	readWait = 60 * time.Second
 
-	// Time allowed for client to respond to the websocket.Conn.Ping(). Must be less than readWrite
-	heartbeatWait = (readWait * 9) / 10
+	// Time allowed for client to respond to the websocket.Conn.Ping(). Must be less than readWait
+	heartbeatPeriod = (readWait * 9) / 10
 
 	// Maximum message size allowed from client.
 	maxMessageSize = int64(512)
@@ -242,6 +242,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// messageReceiver listens for incoming messages from the client and processes them based on the message type.
 func (p *PopSocket) messageReceiver(ctx context.Context, client *Client) {
 	for {
 		select {
@@ -307,6 +308,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client) {
 	}
 }
 
+// messageSender dispatches messages from the PopSocket to the associated client.
 func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 	t := time.NewTicker(1 * time.Second)
 	defer t.Stop()
@@ -328,8 +330,9 @@ func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 	}
 }
 
+// heartbeat sends periodic ping messages to the client to ensure the connection is still active.
 func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
-	ticker := time.NewTimer(heartbeatWait)
+	ticker := time.NewTimer(heartbeatPeriod)
 	defer ticker.Stop()
 	client.conn.SetReadLimit(maxMessageSize)
 
@@ -344,7 +347,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
 				client.conn.Close(websocket.StatusPolicyViolation, "Pong not received.")
 				return
 			}
-			ticker.Reset(heartbeatWait)
+			ticker.Reset(heartbeatPeriod)
 			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %s", client.id))
 		}
 	}

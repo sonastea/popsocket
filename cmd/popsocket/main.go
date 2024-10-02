@@ -16,8 +16,8 @@ func Run(ctx context.Context, valkey valkey.Client) error {
 	mux := http.NewServeMux()
 
 	ps, err := popsocket.New(
-    valkey,
-    popsocket.WithServeMux(mux),
+		valkey,
+		popsocket.WithServeMux(mux),
 		popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
 	)
 	if err != nil {
@@ -37,10 +37,10 @@ func Run(ctx context.Context, valkey valkey.Client) error {
 func main() {
 	ctx := context.Background()
 
-  valkey, err := popsocket.NewValkeyClient()
-  if err != nil {
-    log.Printf("Failed to created valkey client: %+v", err)
-  }
+	valkey, err := popsocket.NewValkeyClient()
+	if err != nil {
+		log.Printf("Failed to created valkey client: %+v", err)
+	}
 
 	if err := Run(ctx, valkey); err != nil {
 		log.Fatalln(err)
