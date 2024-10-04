@@ -333,7 +333,6 @@ func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("message sender done")
 			return
 		case <-t.C:
 			err := client.conn.Write(ctx, websocket.MessageText, []byte(client.id))

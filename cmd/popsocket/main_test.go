@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
 	"github.com/sonastea/popsocket/pkg/popsocket"
 	"github.com/valkey-io/valkey-go"
@@ -15,12 +15,14 @@ import (
 
 // TestRun ensures popsocket's cmd entry point properly runs
 func TestRun(t *testing.T) {
-	t.Parallel()
-
-	os.Setenv("POPSOCKET_ADDR", ":8989")
+	s := miniredis.RunT(t)
+	defer s.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+
+	t.Setenv("POPSOCKET_ADDR", ":8989")
+	t.Setenv("REDIS_URL", s.Addr())
 
 	errCh := make(chan error, 1)
 	valkey, err := popsocket.NewValkeyClient(valkey.ClientOption{DisableCache: true})
