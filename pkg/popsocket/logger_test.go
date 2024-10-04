@@ -2,7 +2,6 @@ package popsocket
 
 import (
 	"log/slog"
-	"os"
 	"sync"
 	"testing"
 )
@@ -11,10 +10,8 @@ import (
 func TestNewLoggerSingleton(t *testing.T) {
 	t.Parallel()
 
-	handler := slog.NewJSONHandler(os.Stdout, nil)
-
-	logger1 := newLogger(handler)
-	logger2 := newLogger(handler)
+	logger1 := newLogger()
+	logger2 := newLogger()
 
 	if logger1 != logger2 {
 		t.Errorf("NewLogger should return the same instance, got different instances")
@@ -25,7 +22,6 @@ func TestNewLoggerSingleton(t *testing.T) {
 func TestNewLoggerConcurrency(t *testing.T) {
 	t.Parallel()
 
-	handler := slog.NewTextHandler(os.Stdout, nil)
 	var wg sync.WaitGroup
 
 	const numGoroutines = 100
@@ -35,7 +31,7 @@ func TestNewLoggerConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			loggerInstances[i] = newLogger(handler)
+			loggerInstances[i] = newLogger()
 		}(i)
 	}
 

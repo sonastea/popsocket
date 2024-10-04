@@ -13,10 +13,8 @@ import (
 // TestLoadValkeyInitAddress_WithValue tests that the function correctly
 // loads a single address from the REDIS_URL environment variable.
 func TestLoadValkeyInitAddress_WithValue(t *testing.T) {
-	t.Parallel()
-
 	expected := "test.local:6379"
-	os.Setenv("REDIS_URL", expected)
+	t.Setenv("REDIS_URL", expected)
 
 	addr := loadValkeyInitAddress()
 
@@ -28,10 +26,8 @@ func TestLoadValkeyInitAddress_WithValue(t *testing.T) {
 // TestLoadValkeyInitAddress_WithMultipleValues tests that the function handles
 // multiple comma-separated addresses and trims spaces around each address.
 func TestLoadValkeyInitAddress_WithMultipleValues(t *testing.T) {
-	t.Parallel()
-
-	initialAddrs := []string{"redis.local:6379 ", " test.local:6379", " redis2.local:6379 "}
-	os.Setenv("REDIS_URL", strings.Join(initialAddrs, ","))
+	initialAddrs := []string{"redis.local:23456 ", " test.local:23457", " redis2.local:23458 "}
+	t.Setenv("REDIS_URL", strings.Join(initialAddrs, ","))
 
 	expected := make([]string, 3)
 	for i := range initialAddrs {
@@ -47,8 +43,6 @@ func TestLoadValkeyInitAddress_WithMultipleValues(t *testing.T) {
 // TestLoadValkeyInitAddress_WithoutValue tests that the function returns the
 // default address when the REDIS_URL environment variable is not set.
 func TestLoadValkeyInitAddress_WithoutValue(t *testing.T) {
-	t.Parallel()
-
 	os.Unsetenv("REDIS_URL")
 
 	addr := loadValkeyInitAddress()
@@ -65,7 +59,7 @@ func TestNewValkeyClient(t *testing.T) {
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	_, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -76,7 +70,7 @@ func TestNewValkeyClient(t *testing.T) {
 // TestNewValkeyClient_ExpectFail test that NewValkeyClient returns
 // an error when it cannot connect to the specified Redis server.
 func TestNewValkeyClient_ExpectFail(t *testing.T) {
-	os.Setenv("REDIS_URL", "127.0.0.1:6380")
+	t.Setenv("REDIS_URL", "127.0.0.1:6380")
 
 	_, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err == nil {

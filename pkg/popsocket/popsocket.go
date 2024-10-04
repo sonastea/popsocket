@@ -91,7 +91,7 @@ func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 			Addr:    ":80",
 			Handler: http.NewServeMux(),
 		},
-		logger: newLogger(slog.NewJSONHandler(os.Stdout, nil)),
+		logger: newLogger(),
 		Valkey: valkey,
 	}
 
@@ -240,6 +240,23 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	case <-done:
 		cancel()
 	}
+
+	/* clientId := "1"
+			hashKey := fmt.Sprintf("convosession:%s", clientId)
+			err = p.Valkey.Do(r.Context(), p.Valkey.B().Hset().Key(hashKey).FieldValue().FieldValue("id", clientId).Build()).Error()
+			if err != nil {
+				p.LogError("Failed to set hash field: ", err)
+			}
+			keys := make(map[string]bool)
+			cursor := uint64(0)
+			results, _ := p.Valkey.Do(r.Context(), p.Valkey.B().Scan().Cursor(cursor).Match("convosession:*").Count(100).Build()).AsScanEntry()
+
+			for _, key := range results.Elements {
+				keys[key] = true
+			}
+
+	    cursor = nextCursor
+			fmt.Printf("%+v \n", keys) */
 }
 
 // messageReceiver listens for incoming messages from the client and processes them based on the message type.

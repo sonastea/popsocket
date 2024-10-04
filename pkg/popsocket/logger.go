@@ -3,6 +3,8 @@ package popsocket
 import (
 	"log/slog"
 	"sync"
+
+	"github.com/sonastea/popsocket/pkg/prettylog"
 )
 
 var (
@@ -11,9 +13,16 @@ var (
 )
 
 // newLogger returns a singleton slog.Logger
-func newLogger(handler slog.Handler) *slog.Logger {
+func newLogger() *slog.Logger {
 	once.Do(func() {
-		logger = slog.New(handler)
+		prettyHandler := prettylog.NewHandler(&slog.HandlerOptions{
+			// TODO don't hardcode; use env?, pass to popsocket.New()?, logger helper funcs?.
+			Level:       slog.LevelInfo,
+			AddSource:   false,
+			ReplaceAttr: nil,
+		})
+
+		logger = slog.New(prettyHandler)
 	})
 	return logger
 }
