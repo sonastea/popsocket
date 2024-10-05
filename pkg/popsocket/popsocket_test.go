@@ -439,3 +439,36 @@ func TestStartWithFailure(t *testing.T) {
 		t.Fatal("Timeout waiting for server to return an error")
 	}
 }
+
+// TestNewWithCustomTimeout runs Start() to make sure the server starts and handles shutdown properly.
+func TestNewWithCustomTimeout(t *testing.T) {
+	t.Parallel()
+
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	os.Setenv("REDIS_URL", s.Addr())
+
+	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	expectedTimeout := 9 * time.Second
+	ps, err := New(valkey, WithAddress(":0"), WithWriteTimeout(expectedTimeout), WithReadTimeout(expectedTimeout), WithIdleTimeout(expectedTimeout))
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
+
+	if ps.httpServer.WriteTimeout != expectedTimeout {
+		t.Fatalf("Expected write timeout of %v, got %s", expectedTimeout, ps.httpServer.WriteTimeout)
+	}
+
+	if ps.httpServer.ReadTimeout != expectedTimeout {
+		t.Fatalf("Expected read timeout of %v, got %s", expectedTimeout, ps.httpServer.ReadTimeout)
+	}
+
+	if ps.httpServer.IdleTimeout != expectedTimeout {
+		t.Fatalf("Expected idle timeout of %v, got %s", expectedTimeout, ps.httpServer.IdleTimeout)
+	}
+}

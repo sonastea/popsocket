@@ -32,6 +32,15 @@ const (
 
 	// Maximum message size allowed from client.
 	maxMessageSize = int64(512)
+
+	// writeTimeout sets the maximum duration before timing out writes of the response.
+	writeTimeout = 15 * time.Second
+
+	// readTimeout sets the maximum duration for reading the entire request.
+	readTimeout = 15 * time.Second
+
+	// idleTimeout sets the maximum amount of time to wait for the next request.
+	idleTimeout = 60 * time.Second
 )
 
 var (
@@ -88,8 +97,11 @@ func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 	ps := &PopSocket{
 		clients: make(map[*Client]bool),
 		httpServer: &http.Server{
-			Addr:    ":80",
-			Handler: http.NewServeMux(),
+			Addr:         ":80",
+			ReadTimeout:  readTimeout,
+			WriteTimeout: writeTimeout,
+			IdleTimeout:  idleTimeout,
+			Handler:      http.NewServeMux(),
 		},
 		logger: newLogger(),
 		Valkey: valkey,
@@ -121,6 +133,30 @@ func WithAddress(addr string) option {
 		if addr != "" {
 			ps.httpServer.Addr = addr
 		}
+		return nil
+	}
+}
+
+// WithWriteTimeout allows setting a custom write timeout for the HTTP server.
+func WithWriteTimeout(timeout time.Duration) option {
+	return func(ps *PopSocket) error {
+		ps.httpServer.WriteTimeout = timeout
+		return nil
+	}
+}
+
+// WithReadTimeout allows setting a custom read timeout for the HTTP server.
+func WithReadTimeout(timeout time.Duration) option {
+	return func(ps *PopSocket) error {
+		ps.httpServer.ReadTimeout = timeout
+		return nil
+	}
+}
+
+// WithIdleTimeout allows setting a custom idle timeout for the HTTP server.
+func WithIdleTimeout(timeout time.Duration) option {
+	return func(ps *PopSocket) error {
+		ps.httpServer.IdleTimeout = timeout
 		return nil
 	}
 }
