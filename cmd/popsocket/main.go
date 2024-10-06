@@ -24,7 +24,10 @@ func Run(ctx context.Context, valkey valkey.Client) error {
 		return fmt.Errorf("Failed to create PopSocket: %w", err)
 	}
 
-	mux.HandleFunc("/", ps.ServeWsHandle)
+  err = ps.SetupRoutes(mux)
+  if err != nil {
+    return fmt.Errorf("Failed to setup PopSocket routes: %w", err)
+  }
 
 	if err := ps.Start(ctx); err != nil {
 		ps.LogError(fmt.Sprintf("Server error: %v", err))

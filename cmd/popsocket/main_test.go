@@ -37,8 +37,10 @@ func TestRun(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	wsURL := "ws://127.0.0.1:8989/"
+	header := http.Header{}
+	header.Add("Cookie", "connect.sid=s%lorem.ipsum")
 
-	wsConn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{})
+	wsConn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
 		t.Fatalf("Failed to connect to WebSocket server: %v", err)
 	}

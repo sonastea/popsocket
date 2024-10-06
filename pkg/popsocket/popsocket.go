@@ -64,6 +64,7 @@ type PopSocketInterface interface {
 
 	Start(ctx context.Context) error
 	ServeWsHandle(w http.ResponseWriter, r *http.Request)
+	SetupRoutes(mux *http.ServeMux) error
 }
 
 type PopSocket struct {
@@ -293,6 +294,12 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 
 	    cursor = nextCursor
 			fmt.Printf("%+v \n", keys) */
+}
+
+func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
+	mux.HandleFunc("/", checkSession(p.ServeWsHandle))
+
+	return nil
 }
 
 // messageReceiver listens for incoming messages from the client and processes them based on the message type.

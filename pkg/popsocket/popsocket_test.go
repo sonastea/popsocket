@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -278,7 +279,12 @@ func TestServeWsHandle(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		conn, _, err := websocket.Dial(ctx, wsUrl, nil)
+		header := http.Header{}
+		header.Add("Cookie", "connect.sid=s%lorem.ipsum")
+
+		conn, _, err := websocket.Dial(ctx, wsUrl, &websocket.DialOptions{
+			HTTPHeader: header,
+		})
 		if err != nil {
 			t.Fatalf("Failed to connect to WebSocket server: %v", err)
 		}
@@ -470,5 +476,79 @@ func TestNewWithCustomTimeout(t *testing.T) {
 
 	if ps.httpServer.IdleTimeout != expectedTimeout {
 		t.Fatalf("Expected idle timeout of %v, got %s", expectedTimeout, ps.httpServer.IdleTimeout)
+	}
+}
+
+// TestSetupRoutes tests that the SetupRoutes function correctly
+// registers the checkSession middleware for the ServeWsHandle.
+func TestSetupRoutes(t *testing.T) {
+	t.Parallel()
+
+	ps := &PopSocket{}
+
+	mux := http.NewServeMux()
+	err := ps.SetupRoutes(mux)
+	if err != nil {
+		t.Fatalf("Expected no error, but got %v", err)
+	}
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("Expected no error when making GET request, but got %v", err)
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("Expected no error reading body, got %v", err)
+	}
+
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected status code 401, but got %d", res.StatusCode)
+	}
+
+	expectedBody := "Unauthorized: Missing or invalid session"
+	if string(body) == expectedBody {
+		t.Errorf("Expected response body '%s', got '%s'", expectedBody, string(body))
+	}
+}
+
+// TestSetupRoutes_WithErr tests that the SetupRoutes function correctly
+// registers the checkSession middleware for the ServeWsHandle.
+func TestSetupRoutes_WithErr(t *testing.T) {
+	t.Parallel()
+
+	ps := &PopSocket{}
+
+	mux := http.NewServeMux()
+	err := ps.SetupRoutes(mux)
+	if err != nil {
+		t.Fatalf("Expected no error, but got %v", err)
+	}
+
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("Expected no error when making GET request, but got %v", err)
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("Expected no error reading body, got %v", err)
+	}
+
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Errorf("Expected status code 401, but got %d", res.StatusCode)
+	}
+
+	expectedBody := "Unauthorized: Missing or invalid session"
+	if string(body) == expectedBody {
+		t.Errorf("Expected response body '%s', got '%s'", expectedBody, string(body))
 	}
 }
