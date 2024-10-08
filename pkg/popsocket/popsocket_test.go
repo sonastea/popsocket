@@ -19,16 +19,15 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
+	"github.com/sonastea/popsocket/pkg/testutil"
 	"github.com/valkey-io/valkey-go"
 )
 
 // TestLoadAllowedOrigins loads the env variable `ALLOWED_ORIGINS` and
 // sanitizes/returns the set or default values.
 func TestLoadAllowedOrigins(t *testing.T) {
-	t.Parallel()
-
 	originalAllowedOrigins := os.Getenv("ALLOWED_ORIGINS")
-	defer os.Setenv("ALLOWED_ORIGINS", originalAllowedOrigins) // Restore original value after test
+	defer t.Setenv("ALLOWED_ORIGINS", originalAllowedOrigins) // Restore original value after test
 
 	tests := []struct {
 		name            string
@@ -59,7 +58,7 @@ func TestLoadAllowedOrigins(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Setenv("ALLOWED_ORIGINS", tt.allowed)
+			t.Setenv("ALLOWED_ORIGINS", tt.allowed)
 
 			loadAllowedOrigins()
 
@@ -73,12 +72,10 @@ func TestLoadAllowedOrigins(t *testing.T) {
 // TestLoggingFunctions calls PopSocket's methods which are wrappers
 // of slog's logging methods.
 func TestLoggingFunctions(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -131,12 +128,10 @@ func TestLoggingFunctions(t *testing.T) {
 
 // TestNew ensures New() returns a valid PopSocket instance.
 func TestNew(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
 		t.Fatalf("Expected new valkey client, got %s", err)
@@ -167,10 +162,8 @@ func TestNew(t *testing.T) {
 // TestNew_Options ensures New() can handle passed options
 // and return a valid instance of PopSocket or error.
 func TestNew_Options(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -203,12 +196,10 @@ func TestNew_Options(t *testing.T) {
 // TestWithAddress ensures that the PopSocket instance
 // sets and uses the specified address in httpServer.
 func TestWithAddress(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	addr := ":8080"
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
@@ -228,12 +219,10 @@ func TestWithAddress(t *testing.T) {
 
 // TestWithServeMux ensures that PopSocket's handler is set to use the provided ServeMux.
 func TestWithServeMux(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -253,12 +242,20 @@ func TestWithServeMux(t *testing.T) {
 // TestServeWsHandle ensures that client connections are correctly managed
 // and messages are processed from and to.
 func TestServeWsHandle(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
 	os.Setenv("REDIS_URL", s.Addr())
+	secretKey, err := testutil.SetRandomTestSecretKey()
+	if err != nil {
+		t.Fatalf("Unable to set random test secret key: %s", err)
+	}
+
+	expectedSID := "foo"
+	cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
+	if err != nil {
+		t.Fatalf("Unable to create signed cookie: %s", err)
+	}
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -277,10 +274,11 @@ func TestServeWsHandle(t *testing.T) {
 		wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx = context.WithValue(ctx, userIDKey, "9")
 		defer cancel()
 
 		header := http.Header{}
-		header.Add("Cookie", "connect.sid=s%lorem.ipsum")
+		header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
 
 		conn, _, err := websocket.Dial(ctx, wsUrl, &websocket.DialOptions{
 			HTTPHeader: header,
@@ -298,7 +296,9 @@ func TestServeWsHandle(t *testing.T) {
 			t.Errorf("Expected 1 client, got %d", clients)
 		}
 
-		psMessage := Message{Event: MessageType.Connect, Content: "ping!"}
+		fmt.Printf("client: %+v \n", ctx.Value(userIDKey).(string))
+
+		psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
 		m, err := json.Marshal(psMessage)
 		err = conn.Write(ctx, websocket.MessageText, m)
 		if err != nil {
@@ -310,16 +310,17 @@ func TestServeWsHandle(t *testing.T) {
 			t.Fatalf("Failed to read message from server: %v", err)
 		}
 
-		var message Message
+		var message EventMessage
 		err = json.Unmarshal(msg, &message)
 		if err != nil {
 			t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
 		}
 
-		if message.Event != MessageType.Connect {
-			t.Errorf("Expected event '%s', got '%s'", MessageType.Connect, message.Event)
+		if message.Event != EventMessageType.Connect {
+			t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
 		}
 
+		cancel()
 		conn.Close(websocket.StatusNormalClosure, "")
 		time.Sleep(100 * time.Millisecond)
 
@@ -353,12 +354,10 @@ func TestServeWsHandle(t *testing.T) {
 
 // TestStart runs Start() to make sure the server starts and handles shutdown properly.
 func TestStart(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -401,8 +400,6 @@ func TestStart(t *testing.T) {
 // TestStartWithFailure runs Start() with an error (occupied port) to determine if
 // the server handles and returns an appropriate error.
 func TestStartWithFailure(t *testing.T) {
-	t.Parallel()
-
 	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		t.Fatalf("Failed to create listener: %v", err)
@@ -413,7 +410,7 @@ func TestStartWithFailure(t *testing.T) {
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -448,12 +445,10 @@ func TestStartWithFailure(t *testing.T) {
 
 // TestNewWithCustomTimeout runs Start() to make sure the server starts and handles shutdown properly.
 func TestNewWithCustomTimeout(t *testing.T) {
-	t.Parallel()
-
 	s := miniredis.RunT(t)
 	defer s.Close()
 
-	os.Setenv("REDIS_URL", s.Addr())
+	t.Setenv("REDIS_URL", s.Addr())
 
 	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 	if err != nil {
@@ -482,8 +477,6 @@ func TestNewWithCustomTimeout(t *testing.T) {
 // TestSetupRoutes tests that the SetupRoutes function correctly
 // registers the checkSession middleware for the ServeWsHandle.
 func TestSetupRoutes(t *testing.T) {
-	t.Parallel()
-
 	ps := &PopSocket{}
 
 	mux := http.NewServeMux()
@@ -519,8 +512,6 @@ func TestSetupRoutes(t *testing.T) {
 // TestSetupRoutes_WithErr tests that the SetupRoutes function correctly
 // registers the checkSession middleware for the ServeWsHandle.
 func TestSetupRoutes_WithErr(t *testing.T) {
-	t.Parallel()
-
 	ps := &PopSocket{}
 
 	mux := http.NewServeMux()

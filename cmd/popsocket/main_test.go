@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
 	"github.com/sonastea/popsocket/pkg/popsocket"
+	"github.com/sonastea/popsocket/pkg/testutil"
 	"github.com/valkey-io/valkey-go"
 )
 
@@ -23,6 +25,17 @@ func TestRun(t *testing.T) {
 
 	t.Setenv("POPSOCKET_ADDR", ":8989")
 	t.Setenv("REDIS_URL", s.Addr())
+
+	secretKey, err := testutil.SetRandomTestSecretKey()
+	if err != nil {
+		t.Fatalf("Unable to set random test secret key: %s", err)
+	}
+
+	expectedSID := "foo"
+	cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
+	if err != nil {
+		t.Fatalf("Unable to create signed cookie: %s", err)
+	}
 
 	errCh := make(chan error, 1)
 	valkey, err := popsocket.NewValkeyClient(valkey.ClientOption{DisableCache: true})
@@ -38,33 +51,20 @@ func TestRun(t *testing.T) {
 
 	wsURL := "ws://127.0.0.1:8989/"
 	header := http.Header{}
-	header.Add("Cookie", "connect.sid=s%lorem.ipsum")
+	header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
 
-	wsConn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
+	_, r, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: header})
 	if err != nil {
-		t.Fatalf("Failed to connect to WebSocket server: %v", err)
-	}
-	defer wsConn.CloseNow()
+		defer r.Body.Close()
+		body, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			t.Fatalf("Failed to read response body: %v", readErr)
+		}
 
-	if wsConn == nil {
-		t.Fatal("Expected a valid WebSocket connection, got nil")
-	}
-
-	psMessage := popsocket.Message{Event: popsocket.MessageType.Connect, Content: "ping!"}
-	m, err := json.Marshal(psMessage)
-	err = wsConn.Write(ctx, websocket.MessageText, m)
-	if err != nil {
-		t.Fatalf("Failed to send message to WebSocket server: %v", err)
-	}
-
-	_, msg, err := wsConn.Read(ctx)
-	if err != nil {
-		t.Fatalf("Failed to read message from WebSocket server: %v", err)
-	}
-
-	expectedMessage := `{"event":"CONNECT","content":"pong!"}`
-	if string(msg) != expectedMessage {
-		t.Errorf("Expected message '%s', got '%s'", expectedMessage, msg)
+		expectedBody := "Unauthorized: Missing or invalid session\n"
+		if string(body) != expectedBody {
+			t.Fatalf("Expected body '%v', got '%v'", expectedBody, string(body))
+		}
 	}
 
 	cancel()

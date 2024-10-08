@@ -54,18 +54,18 @@ func TestLogger(t *testing.T) {
 	logger4 := newLogger()
 
 	if logger1 != logger2 {
-    t.Errorf("NewLogger should return the same instance, got logger1:%v and logger2:%v", logger1, logger2)
+		t.Errorf("NewLogger should return the same instance, got logger1:%v and logger2:%v", logger1, logger2)
 	}
 
 	if logger2 != logger3 {
-    t.Errorf("NewLogger should return the same instance, got logger2:%v and logger3:%v", logger2, logger3)
+		t.Errorf("NewLogger should return the same instance, got logger2:%v and logger3:%v", logger2, logger3)
 	}
 
 	if logger3 != logger4 {
-    t.Errorf("NewLogger should return the same instance, got logger3:%v and logger4:%v", logger3, logger4)
+		t.Errorf("NewLogger should return the same instance, got logger3:%v and logger4:%v", logger3, logger4)
 	}
 
 	if logger4 != logger1 {
-    t.Errorf("NewLogger should return the same instance, got logger4:%v and logger1:%v", logger4, logger1)
+		t.Errorf("NewLogger should return the same instance, got logger4:%v and logger1:%v", logger4, logger1)
 	}
 }

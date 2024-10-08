@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/sonastea/popsocket/pkg/db"
+	"github.com/sonastea/popsocket/pkg/config"
 	"github.com/valkey-io/valkey-go"
 )
 
@@ -52,8 +52,10 @@ var (
 type option func(ps *PopSocket) error
 
 type Client struct {
-	id   string
-	conn *websocket.Conn
+	connID    string
+	UserID    string `json:"userId,omitempty"`
+	DiscordID string `json:"discordId,omitempty"`
+	conn      *websocket.Conn
 }
 
 type PopSocketInterface interface {
@@ -65,6 +67,16 @@ type PopSocketInterface interface {
 	Start(ctx context.Context) error
 	ServeWsHandle(w http.ResponseWriter, r *http.Request)
 	SetupRoutes(mux *http.ServeMux) error
+
+	checkCookie(next http.HandlerFunc) http.HandlerFunc
+}
+
+type SessionStore interface {
+	Find(ctx context.Context, sid string) (*Session, error)
+}
+
+type MessageStore interface {
+	Convos(ctx context.Context, userID int) (*ConversationsResponse, error)
 }
 
 type PopSocket struct {
@@ -73,10 +85,15 @@ type PopSocket struct {
 	logger     *slog.Logger
 	mu         sync.RWMutex
 	Valkey     valkey.Client
+
+	MessageStore
+	SessionStore
 }
 
-// init initializes default allowed origins for the websocket connections.
+// init loads the app's environment variables and default
+// allowed origins for the websocket connections.
 func init() {
+	config.LoadEnvVars()
 	loadAllowedOrigins()
 }
 
@@ -162,6 +179,20 @@ func WithIdleTimeout(timeout time.Duration) option {
 	}
 }
 
+func WithMessageStore(store MessageStore) option {
+	return func(ps *PopSocket) error {
+		ps.MessageStore = store
+		return nil
+	}
+}
+
+func WithSessionStore(store SessionStore) option {
+	return func(ps *PopSocket) error {
+		ps.SessionStore = store
+		return nil
+	}
+}
+
 // Start launches the PopSocket HTTP server and manages graceful shutdown.
 func (p *PopSocket) Start(ctx context.Context) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGKILL)
@@ -240,8 +271,8 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		conn: conn,
-		id:   r.Header.Get("Sec-Websocket-Key"),
+		conn:   conn,
+		connID: r.Header.Get("Sec-Websocket-Key"),
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
@@ -249,10 +280,16 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	p.addClient(client)
 	p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
 
+	if ctx.Value(userIDKey) != nil {
+		client.UserID = ctx.Value(userIDKey).(string)
+	} else if ctx.Value(discordIDKey) != nil {
+		client.DiscordID = ctx.Value(discordIDKey).(string)
+	}
+
 	defer func() {
 		cancel()
 		p.removeClient(client)
-		p.LogInfo(fmt.Sprintf("Client %s disconnected. Remaining size of connection pool: %v", client.id, p.totalClients()))
+		p.LogInfo(fmt.Sprintf("Client %s disconnected. Remaining size of connection pool: %v", client.connID, p.totalClients()))
 		conn.Close(websocket.StatusNormalClosure, "Client disconnected")
 	}()
 
@@ -273,7 +310,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 
 	select {
 	case <-ctx.Done():
-		p.LogInfo(fmt.Sprintf("Context done for client %s. Exiting ServeWsHandle.", client.id))
+		p.LogInfo(fmt.Sprintf("Context done for client %s. Exiting ServeWsHandle.", client.connID))
 	case <-done:
 		cancel()
 	}
@@ -297,7 +334,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
-	mux.HandleFunc("/", checkSession(p.ServeWsHandle))
+	mux.HandleFunc("/", p.checkCookie(p.ServeWsHandle))
 
 	return nil
 }
@@ -317,34 +354,40 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client) {
 					return
 				}
 				if websocket.CloseStatus(err) != -1 {
-					p.LogWarn(fmt.Sprintf("WebSocket closed for client %s: %v", client.id, err))
+					p.LogWarn(fmt.Sprintf("WebSocket closed for client %v: %v", client, err))
 					return
 				}
-				p.LogWarn(fmt.Sprintf("Error reading from client %s: %v", client.id, err))
+				p.LogWarn(fmt.Sprintf("Error reading from client %v: %v", client, err))
 				return
 			}
 
-			var recv Message
+			var recv EventMessage
 			err = json.Unmarshal(msg, &recv)
 			if err != nil {
-				p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %s, got %s", client.id, string(msg)))
+				p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %v, got %s", client, string(msg)))
 				continue
 			}
 
 			switch recv.Event {
-			case MessageType.Connect:
-				msg, err := json.Marshal(&Message{Event: MessageType.Connect, Content: "pong!"})
+			case EventMessageType.Connect:
+				msg, err := json.Marshal(&EventMessage{Event: EventMessageType.Connect, Content: "pong!"})
 				if err != nil {
 					p.LogError("Error marshalling connect message: %w", err)
 				}
 
 				err = client.conn.Write(ctx, websocket.MessageText, msg)
 
-			case MessageType.Conversations:
-				_, _ = db.NewPostgres(ctx, "postgresql://postgres:postgres@localhost:5432/kpoppop")
+			case EventMessageType.Conversations:
+				id := client.UserID
+				if client.UserID == "" {
+					id = client.DiscordID
+				}
+				userID, err := strconv.Atoi(id)
+				if err != nil {
+					p.LogError("Unable to convert user '%s' to int: err", id, err)
+				}
 
-				userID, _ := strconv.Atoi("1")
-				conversations, err := db.GetMessages(ctx, userID)
+				conversations, err := p.MessageStore.Convos(ctx, userID)
 				if err != nil {
 					p.LogError("Error getting client's conversations: %w", err)
 				}
@@ -353,9 +396,9 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client) {
 					p.LogError("Error marshalling conversations: %w", err)
 				}
 
-				msg, _ := json.Marshal(Message{
-					Event:   MessageType.Conversations,
-					Content: fmt.Sprintf(`["%s", %s]`, MessageType.Conversations, string(convos)),
+				msg, _ := json.Marshal(EventMessage{
+					Event:   EventMessageType.Conversations,
+					Content: fmt.Sprintf(`["%s", %s]`, EventMessageType.Conversations, string(convos)),
 				})
 
 				err = client.conn.Write(ctx, websocket.MessageText, msg)
@@ -378,10 +421,10 @@ func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			err := client.conn.Write(ctx, websocket.MessageText, []byte(client.id))
+			err := client.conn.Write(ctx, websocket.MessageText, []byte(client.UserID+client.DiscordID))
 			if err != nil {
 				if ctx.Err() != nil {
-					p.LogWarn(fmt.Sprintf("Error writing to client %s: %v", client.id, err))
+					p.LogWarn(fmt.Sprintf("Error writing to client %s: %v", client.UserID+client.DiscordID, err))
 					return
 				}
 			}
@@ -395,6 +438,11 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
 	defer ticker.Stop()
 	client.conn.SetReadLimit(maxMessageSize)
 
+	userID := client.UserID
+	if client.UserID == "" {
+		userID = client.DiscordID
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -407,7 +455,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
 				return
 			}
 			ticker.Reset(heartbeatPeriod)
-			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %s", client.id))
+			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %s", userID))
 		}
 	}
 }
