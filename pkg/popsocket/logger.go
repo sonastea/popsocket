@@ -26,3 +26,7 @@ func newLogger() *slog.Logger {
 	})
 	return logger
 }
+
+func Logger() *slog.Logger {
+	return newLogger()
+}
