@@ -12,15 +12,23 @@ import (
 	"github.com/sonastea/popsocket/pkg/testutil"
 )
 
-type FindFuncType func(ctx context.Context, sid string) (*Session, error)
+type MockFuncType func(ctx context.Context, T interface{}) (context.Context, error)
 
 type MockSessionStore struct {
-	FindFunc FindFuncType
+	FindFunc              MockFuncType
+	UserFromDiscordIDFunc MockFuncType
 }
 
-func (m *MockSessionStore) Find(ctx context.Context, sid string) (*Session, error) {
+func (m *MockSessionStore) Find(ctx context.Context, sid string) (context.Context, error) {
 	if m.FindFunc != nil {
 		return m.FindFunc(ctx, sid)
+	}
+	return nil, fmt.Errorf("Session has expired. Please log in again.")
+}
+
+func (m *MockSessionStore) UserFromDiscordID(ctx context.Context, data SessionData) (context.Context, error) {
+	if m.FindFunc != nil {
+		return m.UserFromDiscordIDFunc(ctx, data)
 	}
 	return nil, fmt.Errorf("Session has expired. Please log in again.")
 }
@@ -41,18 +49,23 @@ func TestCheckCookie_WithCookie(t *testing.T) {
 	}
 
 	mockStore := &MockSessionStore{
-		FindFunc: func(ctx context.Context, sid string) (*Session, error) {
-			return &Session{
+		FindFunc: func(ctx context.Context, T interface{}) (context.Context, error) {
+			session := &Session{
 				SID: expectedSID,
 				Data: SessionData{
 					Passport: Passport{
 						User: User{
-							ID: expectedUserID,
+							ID: &expectedUserID,
 						},
 					},
 				},
 				ExpiresAt: time.Now().Add(5 * time.Minute),
-			}, nil
+			}
+
+			ctx = context.WithValue(ctx, "sid", session)
+			ctx = context.WithValue(ctx, USER_ID_KEY, session.Data.Passport.User.ID)
+
+			return ctx, nil
 		},
 	}
 	p := &PopSocket{
@@ -86,8 +99,8 @@ func TestCheckCookie_WithCookie(t *testing.T) {
 		t.Errorf("Expected sid '%s', got '%s'", expectedSID, session.SID)
 	}
 
-	if session.Data.Passport.User.ID != expectedUserID {
-		t.Errorf("Expected userID '%s', got '%s'", expectedUserID, session.Data.Passport.User.ID)
+	if *session.Data.Passport.User.ID != expectedUserID {
+		t.Errorf("Expected UserID '%s', got '%d'", expectedUserID, session.Data.Passport.User.ID)
 	}
 }
 

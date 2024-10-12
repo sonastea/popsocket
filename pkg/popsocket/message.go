@@ -8,6 +8,10 @@ import (
 	"github.com/sonastea/popsocket/pkg/db"
 )
 
+type MessageStore interface {
+	Convos(ctx context.Context, userID int) (*ConversationsResponse, error)
+}
+
 // MessageInterface defines a contract for all message types.
 type MessageInterface interface {
 	Type() string
@@ -64,11 +68,11 @@ type Conversation struct {
 }
 
 type messageStore struct {
-	db db.Database
+	db db.DB
 }
 
 // NewMessageStore creates a new instance of messageStore.
-func NewMessageStore(db db.Database) *messageStore {
+func NewMessageStore(db db.DB) *messageStore {
 	return &messageStore{db: db}
 }
 
@@ -104,8 +108,7 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
         ORDER BY cu.id, cm."createdAt" desc
         `
 
-	// TODO: Remove hardcoded value and use passed params as argument
-	rows, err := ms.db.Pool().Query(ctx, query, "1")
+	rows, err := ms.db.Query(ctx, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("Error querying conversations: %w", err)
 	}

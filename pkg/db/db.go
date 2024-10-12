@@ -3,54 +3,25 @@ package db
 import (
 	"context"
 	"fmt"
-	"log"
-	"log/slog"
-	"sync"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Database interface {
-	Close()
+type DB interface {
+	Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...interface{}) pgx.Row
 	Ping(ctx context.Context) error
-	Pool() *pgxpool.Pool
+	Close()
 }
 
-type postgres struct {
-	db *pgxpool.Pool
-}
+func NewPostgres(ctx context.Context, connString string) (DB, error) {
+	pool, err := pgxpool.New(ctx, connString)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to create connection pool: %s", err)
+	}
 
-var conversations []struct {
-	ID       string   `json:"id"`
-	Messages []string `json:"messages"`
-}
-
-var (
-	logger slog.Logger
-	pg     *postgres
-	pgOnce sync.Once
-)
-
-func NewPostgres(ctx context.Context, connString string) (Database, error) {
-	pgOnce.Do(func() {
-		db, err := pgxpool.New(ctx, connString)
-		if err != nil {
-			log.Fatal(fmt.Errorf("unable to create connection pool: %s", err))
-		}
-		pg = &postgres{db}
-	})
-
-	return pg, nil
-}
-
-func (pg *postgres) Pool() *pgxpool.Pool {
-	return pg.db
-}
-
-func (pg *postgres) Ping(ctx context.Context) error {
-	return pg.db.Ping(ctx)
-}
-
-func (pg *postgres) Close() {
-	pg.db.Close()
+	return &postgres{pool: pool}, nil
 }

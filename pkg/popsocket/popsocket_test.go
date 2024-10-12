@@ -274,7 +274,7 @@ func TestServeWsHandle(t *testing.T) {
 		wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ctx = context.WithValue(ctx, userIDKey, "9")
+		ctx = context.WithValue(ctx, USER_ID_KEY, "9")
 		defer cancel()
 
 		header := http.Header{}
@@ -296,7 +296,7 @@ func TestServeWsHandle(t *testing.T) {
 			t.Errorf("Expected 1 client, got %d", clients)
 		}
 
-		fmt.Printf("client: %+v \n", ctx.Value(userIDKey).(string))
+		fmt.Printf("client: %+v \n", ctx.Value(USER_ID_KEY).(string))
 
 		psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
 		m, err := json.Marshal(psMessage)

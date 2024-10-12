@@ -2,6 +2,7 @@ package popsocket
 
 import (
 	"log/slog"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestNewLoggerConcurrency(t *testing.T) {
 }
 
 // TestLogger ensures that the returned logger is a singleton instance.
-func TestLogger(t *testing.T) {
+func TestLoggerSingleton(t *testing.T) {
 	t.Parallel()
 
 	logger1 := newLogger()
@@ -67,5 +68,16 @@ func TestLogger(t *testing.T) {
 
 	if logger4 != logger1 {
 		t.Errorf("NewLogger should return the same instance, got logger4:%v and logger1:%v", logger4, logger1)
+	}
+}
+
+func TestLogger(t *testing.T) {
+	t.Parallel()
+
+	logger := Logger()
+	loggerType := reflect.TypeOf(logger).Kind()
+
+	if reflect.TypeOf(logger) != reflect.TypeOf((*slog.Logger)(nil)) {
+		t.Errorf("logger expected to be type *slog.Logger, got %s", loggerType)
 	}
 }
