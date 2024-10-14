@@ -10,8 +10,8 @@ import (
 )
 
 type SessionStore interface {
-	Find(ctx context.Context, sid string) (context.Context, error)
-	UserFromDiscordID(ctx context.Context, data SessionData) (context.Context, error)
+	Find(ctx context.Context, sid string) (Session, error)
+	UserFromDiscordID(ctx context.Context, discordID string) (int, error)
 }
 
 type sessionStore struct {
@@ -19,7 +19,7 @@ type sessionStore struct {
 }
 
 type User struct {
-	ID        *string `json:"id,omitempty"`
+	ID        int     `json:"id,omitempty"`
 	DiscordID *string `json:"discordId,omitempty"`
 }
 
@@ -38,8 +38,10 @@ type Session struct {
 }
 
 const (
-	SESSION_EXPIRED = "Session has expired. Please log in again."
-	SESSION_ERROR   = "Unexpected error with your session. Please log in again."
+	SESSION_EXPIRED        = "Session has expired. Please log in again."
+	SESSION_ERROR          = "Unexpected error with your session. Please log in again."
+	SESSION_UNAUTHORIZED   = "Unauthorized: Missing or invalid session."
+	SESSION_MISSING_COOKIE = "Missing session cookie in request headers."
 )
 
 // NewSessionStore creates a new instance of sessionStore.
@@ -49,7 +51,7 @@ func NewSessionStore(db db.DB) *sessionStore {
 
 // Find queries the database for a session matching the sid and populates
 // the context with the client's userIDKey and discordIDKey.
-func (ss *sessionStore) Find(ctx context.Context, sid string) (context.Context, error) {
+func (ss *sessionStore) Find(ctx context.Context, sid string) (Session, error) {
 	var session Session
 	var jsonData json.RawMessage
 
@@ -57,45 +59,33 @@ func (ss *sessionStore) Find(ctx context.Context, sid string) (context.Context, 
 	err := ss.db.QueryRow(ctx, query, sid).Scan(&session.SID, &jsonData, &session.ExpiresAt)
 	if err != nil {
 		Logger().Error(fmt.Sprintf("%+v", err))
-		return nil, err
+		return Session{}, err
 	}
 
 	if time.Now().After(session.ExpiresAt) {
-		return nil, fmt.Errorf(SESSION_EXPIRED)
+		return Session{}, fmt.Errorf(SESSION_EXPIRED)
 	}
 
 	err = json.Unmarshal(jsonData, &session.Data)
 	if err != nil {
 		Logger().Error(fmt.Sprintf("SessionStore.Find Unmarshal Error: %s", err.Error()))
-		return nil, fmt.Errorf(SESSION_ERROR)
+		return Session{}, fmt.Errorf(SESSION_ERROR)
 	}
 
-	// UserID present, return with context here
-	if session.Data.Passport.User.ID != nil {
-		ctx = context.WithValue(ctx, USER_ID_KEY, &session.Data.Passport.User.ID)
-		return ctx, nil
-	}
-
-	// DiscordID, get client's UserID
-	return ss.UserFromDiscordID(ctx, session.Data)
+	return session, nil
 }
 
-// userFromDiscordID finds the client's user id to fulfill the client's id field.
+// UserFromDiscordID finds the client's user id to fulfill the client's id field.
 // Every client has a local account with kpopppop regardless of the user's login method.
 // Therefore, we use client.ID() because their userID should always be present.
-func (ss *sessionStore) UserFromDiscordID(ctx context.Context, data SessionData) (context.Context, error) {
+func (ss *sessionStore) UserFromDiscordID(ctx context.Context, discordID string) (int, error) {
+	var userID int
 	query := `SELECT id FROM "DiscordUser" WHERE "discordId" = $1`
 
-	discordID := *data.Passport.User.DiscordID
-	var userID int
 	err := ss.db.QueryRow(ctx, query, discordID).Scan(&userID)
 	if err != nil {
-		Logger().Warn(fmt.Sprintf("%+v", err))
-		return nil, fmt.Errorf("Failed to find user with discord id %s", discordID)
+		return 0, fmt.Errorf(SESSION_UNAUTHORIZED)
 	}
 
-	ctx = context.WithValue(ctx, USER_ID_KEY, userID)
-	ctx = context.WithValue(ctx, DISCORD_ID_KEY, discordID)
-
-	return ctx, nil
+	return userID, nil
 }

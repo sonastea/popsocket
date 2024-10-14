@@ -2,13 +2,11 @@ package popsocket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -60,8 +58,6 @@ type PopSocketInterface interface {
 	Start(ctx context.Context) error
 	ServeWsHandle(w http.ResponseWriter, r *http.Request)
 	SetupRoutes(mux *http.ServeMux) error
-
-	checkCookie(next http.HandlerFunc) http.HandlerFunc
 }
 
 type PopSocket struct {
@@ -73,7 +69,7 @@ type PopSocket struct {
 	clients map[client]bool
 
 	MessageStore
-	SessionStore
+	SessionMiddleware
 }
 
 // init loads the app's environment variables and default
@@ -165,6 +161,7 @@ func WithIdleTimeout(timeout time.Duration) option {
 	}
 }
 
+// WithMessageStore allows passing a custom message store to PopSocket to utilize.
 func WithMessageStore(store MessageStore) option {
 	return func(ps *PopSocket) error {
 		ps.MessageStore = store
@@ -172,9 +169,10 @@ func WithMessageStore(store MessageStore) option {
 	}
 }
 
-func WithSessionStore(store SessionStore) option {
+// WithSessionMiddleware allows passing a custom session middleware to PopSocket to utilize.
+func WithSessionMiddleware(middleware SessionMiddleware) option {
 	return func(ps *PopSocket) error {
-		ps.SessionStore = store
+		ps.SessionMiddleware = middleware
 		return nil
 	}
 }
@@ -256,24 +254,11 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{
-		conn:   conn,
-		connID: r.Header.Get("Sec-Websocket-Key"),
-	}
-
 	ctx, cancel := context.WithCancel(r.Context())
+	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
 
 	p.addClient(client)
 	p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
-
-	if id, ok := ctx.Value(USER_ID_KEY).(int); ok {
-		client.UserID = &id
-	}
-	if id, ok := ctx.Value(DISCORD_ID_KEY).(string); ok {
-		client.DiscordID = &id
-	}
-
-	p.LogWarn(fmt.Sprintf("%+v", client))
 
 	defer func() {
 		cancel()
@@ -293,7 +278,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		done <- struct{}{}
 	}()
 	go func() {
-		p.heartbeat(ctx, client)
+		p.heartbeat(ctx, client, heartbeatPeriod)
 		done <- struct{}{}
 	}()
 
@@ -323,98 +308,14 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
-	mux.HandleFunc("/", p.checkCookie(p.ServeWsHandle))
+	mux.HandleFunc("/", p.ValidateCookie(p.ServeWsHandle))
 
 	return nil
 }
 
-// messageReceiver listens for incoming messages from the client and processes them based on the message type.
-func (p *PopSocket) messageReceiver(ctx context.Context, client client) {
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Printf("message receiver done")
-			return
-
-		default:
-			_, msg, err := client.Conn().Read(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				if websocket.CloseStatus(err) != -1 {
-					p.LogWarn(fmt.Sprintf("WebSocket closed for client %v: %v", client, err))
-					return
-				}
-				p.LogWarn(fmt.Sprintf("Error reading from client %v: %v", client, err))
-				return
-			}
-
-			var recv EventMessage
-			err = json.Unmarshal(msg, &recv)
-			if err != nil {
-				p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %v, got %s", client, string(msg)))
-				continue
-			}
-
-			switch recv.Event {
-			case EventMessageType.Connect:
-				msg, err := json.Marshal(&EventMessage{Event: EventMessageType.Connect, Content: "pong!"})
-				if err != nil {
-					p.LogError("Error marshalling connect message: %w", err)
-				}
-
-				err = client.Conn().Write(ctx, websocket.MessageText, msg)
-
-			case EventMessageType.Conversations:
-				conversations, err := p.MessageStore.Convos(ctx, client.ID())
-				if err != nil {
-					p.LogError("Error getting client's conversations: %w", err)
-				}
-				convos, err := json.Marshal(conversations.Conversations)
-				if err != nil {
-					p.LogError("Error marshalling conversations: %w", err)
-				}
-
-				msg, _ := json.Marshal(EventMessage{
-					Event:   EventMessageType.Conversations,
-					Content: fmt.Sprintf(`["%s", %s]`, EventMessageType.Conversations, string(convos)),
-				})
-
-				err = client.Conn().Write(ctx, websocket.MessageText, msg)
-
-			default:
-				p.LogInfo(fmt.Sprintf("received: %+v", recv))
-
-			}
-		}
-	}
-}
-
-// messageSender dispatches messages from the PopSocket to the associated client.
-func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
-	t := time.NewTicker(1 * time.Second)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			err := client.conn.Write(ctx, websocket.MessageText, []byte(strconv.Itoa(client.ID())))
-			if err != nil {
-				if ctx.Err() != nil {
-					p.LogWarn(fmt.Sprintf("Error writing to client %d: %v", client.ID(), err))
-					return
-				}
-			}
-		}
-	}
-}
-
 // heartbeat sends periodic ping messages to the client to ensure the connection is still active.
-func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
-	ticker := time.NewTimer(heartbeatPeriod)
+func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.Duration) {
+	ticker := time.NewTimer(period)
 	defer ticker.Stop()
 	client.conn.SetReadLimit(maxMessageSize)
 
@@ -423,14 +324,15 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// TODO: Validate session has not expired, close connection if that's not the case.
 			err := client.conn.Ping(ctx)
 			if err != nil {
 				p.LogInfo(fmt.Sprintf("[%s] ping error: %+v \n", time.Now().Local(), err))
 				client.conn.Close(websocket.StatusPolicyViolation, "Pong not received.")
 				return
 			}
-			ticker.Reset(heartbeatPeriod)
-			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %v", client))
+			ticker.Reset(period)
+			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %v", client.ID()))
 		}
 	}
 }

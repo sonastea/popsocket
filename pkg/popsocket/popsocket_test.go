@@ -19,6 +19,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
+	mock_db "github.com/sonastea/popsocket/internal/mock"
 	"github.com/sonastea/popsocket/pkg/testutil"
 	"github.com/valkey-io/valkey-go"
 )
@@ -193,161 +194,205 @@ func TestNew_Options(t *testing.T) {
 	}
 }
 
-// TestWithAddress ensures that the PopSocket instance
-// sets and uses the specified address in httpServer.
-func TestWithAddress(t *testing.T) {
-	s := miniredis.RunT(t)
-	defer s.Close()
+// TestWithOpts ensures that the PopSocket instance sets and uses
+// the passed WithXXX values.
+func TestWithOpts(t *testing.T) {
+	t.Run("With Address", func(t *testing.T) {
+		s := miniredis.RunT(t)
+		defer s.Close()
 
-	t.Setenv("REDIS_URL", s.Addr())
+		t.Setenv("REDIS_URL", s.Addr())
 
-	addr := ":8080"
-	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-	if err != nil {
-		t.Fatalf("Expected new valkey client, got %s", err)
-	}
-
-	ps, err := New(valkey, WithAddress(addr))
-	if err != nil {
-		t.Fatalf("New() with WithAddress failed: %v", err)
-	}
-
-	if ps.httpServer.Addr != addr {
-		t.Errorf("Expected address %s, got %s", addr, ps.httpServer.Addr)
-	}
-}
-
-// TestWithServeMux ensures that PopSocket's handler is set to use the provided ServeMux.
-func TestWithServeMux(t *testing.T) {
-	s := miniredis.RunT(t)
-	defer s.Close()
-
-	t.Setenv("REDIS_URL", s.Addr())
-
-	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-	if err != nil {
-		t.Fatalf("Expected new valkey client, got %s", err)
-	}
-
-	customMux := http.NewServeMux()
-	ps, err := New(valkey, WithServeMux(customMux))
-	if err != nil {
-		t.Fatalf("New() with WithServeMux failed: %v", err)
-	}
-	if ps.httpServer.Handler != customMux {
-		t.Error("Custom ServeMux not set correctly")
-	}
-}
-
-// TestServeWsHandle ensures that client connections are correctly managed
-// and messages are processed from and to.
-func TestServeWsHandle(t *testing.T) {
-	s := miniredis.RunT(t)
-	defer s.Close()
-
-	os.Setenv("REDIS_URL", s.Addr())
-	secretKey, err := testutil.SetRandomTestSecretKey()
-	if err != nil {
-		t.Fatalf("Unable to set random test secret key: %s", err)
-	}
-
-	expectedSID := "foo"
-	cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
-	if err != nil {
-		t.Fatalf("Unable to create signed cookie: %s", err)
-	}
-
-	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-	if err != nil {
-		t.Fatalf("Expected new valkey client, got %s", err)
-	}
-
-	ps, err := New(valkey)
-	if err != nil {
-		t.Fatalf("New PopSocket failed: %v", err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
-	defer server.Close()
-
-	t.Run("Websocket connection dialed", func(t *testing.T) {
-		wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		ctx = context.WithValue(ctx, USER_ID_KEY, "9")
-		defer cancel()
-
-		header := http.Header{}
-		header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
-
-		conn, _, err := websocket.Dial(ctx, wsUrl, &websocket.DialOptions{
-			HTTPHeader: header,
-		})
+		addr := ":8080"
+		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 		if err != nil {
-			t.Fatalf("Failed to connect to WebSocket server: %v", err)
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "")
-
-		time.Sleep(100 * time.Millisecond)
-
-		clients := ps.totalClients()
-
-		if clients != 1 {
-			t.Errorf("Expected 1 client, got %d", clients)
+			t.Fatalf("Expected new valkey client, got %s", err)
 		}
 
-		fmt.Printf("client: %+v \n", ctx.Value(USER_ID_KEY).(string))
-
-		psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
-		m, err := json.Marshal(psMessage)
-		err = conn.Write(ctx, websocket.MessageText, m)
+		ps, err := New(valkey, WithAddress(addr))
 		if err != nil {
-			t.Fatalf("Failed to send message to server: %v", err)
+			t.Fatalf("New() with WithAddress failed: %v", err)
 		}
 
-		_, msg, err := conn.Read(ctx)
-		if err != nil {
-			t.Fatalf("Failed to read message from server: %v", err)
-		}
-
-		var message EventMessage
-		err = json.Unmarshal(msg, &message)
-		if err != nil {
-			t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
-		}
-
-		if message.Event != EventMessageType.Connect {
-			t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
-		}
-
-		cancel()
-		conn.Close(websocket.StatusNormalClosure, "")
-		time.Sleep(100 * time.Millisecond)
-
-		clients = ps.totalClients()
-
-		if clients != 0 {
-			t.Errorf("Expected 0 clients after closing connection, got %d", clients)
+		if ps.httpServer.Addr != addr {
+			t.Errorf("Expected address %s, got %s", addr, ps.httpServer.Addr)
 		}
 	})
 
-	t.Run("Websocket accept errored", func(t *testing.T) {
-		origin := "local.test"
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Upgrade", "websocket")
-		req.Header.Set("Connection", "Upgrade")
-		req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-		req.Header.Set("Sec-WebSocket-Version", "13")
-		req.Header.Set("Origin", origin)
+	t.Run("With ServeMux", func(t *testing.T) {
+		s := miniredis.RunT(t)
+		defer s.Close()
 
-		rec := httptest.NewRecorder()
-		ps.ServeWsHandle(rec, req)
+		t.Setenv("REDIS_URL", s.Addr())
 
-		if !bytes.Contains(rec.Body.Bytes(), []byte(origin)) {
-			t.Errorf("Received body should have `local.test`, got %s", rec.Body.String())
+		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		if err != nil {
+			t.Fatalf("Expected new valkey client, got %s", err)
 		}
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("Expected HTTP %d status code, got %d", http.StatusForbidden, rec.Code)
+
+		customMux := http.NewServeMux()
+		ps, err := New(valkey, WithServeMux(customMux))
+		if err != nil {
+			t.Fatalf("New() with WithServeMux failed: %v", err)
+		}
+		if ps.httpServer.Handler != customMux {
+			t.Error("Custom ServeMux not set correctly")
+		}
+	})
+
+	t.Run("With ServeWsHandle", func(t *testing.T) {
+		s := miniredis.RunT(t)
+		defer s.Close()
+
+		t.Setenv("REDIS_URL", s.Addr())
+		secretKey, err := testutil.SetRandomTestSecretKey()
+		if err != nil {
+			t.Fatalf("Unable to set random test secret key: %s", err)
+		}
+
+		expectedSID := "foo"
+		cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
+		if err != nil {
+			t.Fatalf("Unable to create signed cookie: %s", err)
+		}
+
+		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		if err != nil {
+			t.Fatalf("Expected new valkey client, got %s", err)
+		}
+
+		ps, err := New(valkey)
+		if err != nil {
+			t.Fatalf("New PopSocket failed: %v", err)
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
+		defer server.Close()
+
+		t.Run("Websocket connection dialed", func(t *testing.T) {
+			wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx = context.WithValue(ctx, USER_ID_KEY, "9")
+			defer cancel()
+
+			header := http.Header{}
+			header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
+
+			conn, _, err := websocket.Dial(ctx, wsUrl, &websocket.DialOptions{
+				HTTPHeader: header,
+			})
+			if err != nil {
+				t.Fatalf("Failed to connect to WebSocket server: %v", err)
+			}
+			defer conn.Close(websocket.StatusNormalClosure, "")
+
+			time.Sleep(100 * time.Millisecond)
+
+			clients := ps.totalClients()
+
+			if clients != 1 {
+				t.Errorf("Expected 1 client, got %d", clients)
+			}
+
+			fmt.Printf("client: %+v \n", ctx.Value(USER_ID_KEY).(string))
+
+			psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
+			m, err := json.Marshal(psMessage)
+			err = conn.Write(ctx, websocket.MessageText, m)
+			if err != nil {
+				t.Fatalf("Failed to send message to server: %v", err)
+			}
+
+			_, msg, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("Failed to read message from server: %v", err)
+			}
+
+			var message EventMessage
+			err = json.Unmarshal(msg, &message)
+			if err != nil {
+				t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
+			}
+
+			if message.Event != EventMessageType.Connect {
+				t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
+			}
+
+			cancel()
+			conn.Close(websocket.StatusNormalClosure, "")
+			time.Sleep(100 * time.Millisecond)
+
+			clients = ps.totalClients()
+
+			if clients != 0 {
+				t.Errorf("Expected 0 clients after closing connection, got %d", clients)
+			}
+		})
+
+		t.Run("Websocket accept errored", func(t *testing.T) {
+			origin := "local.test"
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Upgrade", "websocket")
+			req.Header.Set("Connection", "Upgrade")
+			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+			req.Header.Set("Sec-WebSocket-Version", "13")
+			req.Header.Set("Origin", origin)
+
+			rec := httptest.NewRecorder()
+			ps.ServeWsHandle(rec, req)
+
+			if !bytes.Contains(rec.Body.Bytes(), []byte(origin)) {
+				t.Errorf("Received body should have `local.test`, got %s", rec.Body.String())
+			}
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("Expected HTTP %d status code, got %d", http.StatusForbidden, rec.Code)
+			}
+		})
+	})
+
+	t.Run("With MessageStore", func(t *testing.T) {
+		s := miniredis.RunT(t)
+		defer s.Close()
+
+		t.Setenv("REDIS_URL", s.Addr())
+
+		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		if err != nil {
+			t.Fatalf("Expected new valkey client, got %s", err)
+		}
+		messageStore := NewMessageStore(mock_db.New())
+
+		ps, err := New(valkey, WithMessageStore(messageStore))
+		if err != nil {
+			t.Fatalf("New() with WithMessageStore failed: %v", err)
+		}
+
+		if ps.MessageStore != messageStore {
+			t.Errorf("Expected message store %v, got %v", messageStore, ps.MessageStore)
+		}
+	})
+
+	t.Run("With SessionMiddleware", func(t *testing.T) {
+		s := miniredis.RunT(t)
+		defer s.Close()
+
+		t.Setenv("REDIS_URL", s.Addr())
+
+		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		if err != nil {
+			t.Fatalf("Expected new valkey client, got %s", err)
+		}
+		sessionStore := NewSessionStore(mock_db.New())
+		sessionMiddleware := NewSessionMiddleware(sessionStore)
+
+		ps, err := New(valkey, WithSessionMiddleware(sessionMiddleware))
+		if err != nil {
+			t.Fatalf("New() with WithMessageStore failed: %v", err)
+		}
+
+		if ps.SessionMiddleware != sessionMiddleware {
+			t.Errorf("Expected session middleware %v, got %v", sessionMiddleware, ps.SessionMiddleware)
 		}
 	})
 }

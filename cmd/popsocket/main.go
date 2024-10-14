@@ -25,12 +25,14 @@ func Run(ctx context.Context, valkey valkey.Client) error {
 	messageStore := popsocket.NewMessageStore(db)
 	sessionStore := popsocket.NewSessionStore(db)
 
+	sessionMiddleware := popsocket.NewSessionMiddleware(sessionStore)
+
 	ps, err := popsocket.New(
 		valkey,
 		popsocket.WithServeMux(mux),
 		popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
 		popsocket.WithMessageStore(messageStore),
-		popsocket.WithSessionStore(sessionStore),
+		popsocket.WithSessionMiddleware(sessionMiddleware),
 	)
 	if err != nil {
 		return fmt.Errorf("Failed to create PopSocket: %w", err)

@@ -2,128 +2,161 @@ package popsocket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/sonastea/popsocket/pkg/testutil"
 )
 
-type MockFuncType func(ctx context.Context, T interface{}) (context.Context, error)
+func TestNewSessionMiddleware(t *testing.T) {
+	sm := NewSessionMiddleware(&MockSessionStore{})
 
-type MockSessionStore struct {
-	FindFunc              MockFuncType
-	UserFromDiscordIDFunc MockFuncType
-}
-
-func (m *MockSessionStore) Find(ctx context.Context, sid string) (context.Context, error) {
-	if m.FindFunc != nil {
-		return m.FindFunc(ctx, sid)
+	if _, ok := interface{}(sm).(SessionMiddleware); !ok {
+		t.Fatalf("Expected variable to be of type SessionMiddleware")
 	}
-	return nil, fmt.Errorf("Session has expired. Please log in again.")
 }
 
-func (m *MockSessionStore) UserFromDiscordID(ctx context.Context, data SessionData) (context.Context, error) {
-	if m.FindFunc != nil {
-		return m.UserFromDiscordIDFunc(ctx, data)
-	}
-	return nil, fmt.Errorf("Session has expired. Please log in again.")
-}
+func TestValidateCookie(t *testing.T) {
+	t.Parallel()
 
-// TestCheckSession_WithCookie calls `checkCookie` middleware with a connect.sid cookie to
-// ensure the next HandlerFunc is called afterward.
-func TestCheckCookie_WithCookie(t *testing.T) {
 	secretKey, err := testutil.SetRandomTestSecretKey()
 	if err != nil {
 		t.Fatalf("Unable to set random test secret key: %s", err)
 	}
 
-	expectedUserID := "9"
-	expectedSID := "foo"
+	expectedSID := "s9foo"
+	expectedDiscordID := "9"
+	expectedUserID := 9
 	cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
 	if err != nil {
 		t.Fatalf("Unable to create signed cookie: %s", err)
 	}
 
-	mockStore := &MockSessionStore{
-		FindFunc: func(ctx context.Context, T interface{}) (context.Context, error) {
-			session := &Session{
-				SID: expectedSID,
-				Data: SessionData{
-					Passport: Passport{
-						User: User{
-							ID: &expectedUserID,
+	t.Run("Valid Cookie and Session With UserID", func(t *testing.T) {
+		mockStore := &MockSessionStore{
+			FindFunc: func(ctx context.Context, sid string) (Session, error) {
+				return Session{
+					SID: expectedSID,
+					Data: SessionData{
+						Passport: Passport{
+							User: User{
+								ID:        expectedUserID,
+								DiscordID: &expectedDiscordID,
+							},
 						},
 					},
-				},
-				ExpiresAt: time.Now().Add(5 * time.Minute),
+				}, nil
+			},
+		}
+		sm := NewSessionMiddleware(mockStore)
+
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "connect.sid", Value: cookie})
+		rr := httptest.NewRecorder()
+
+		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := r.Context().Value(USER_ID_KEY)
+			if userID != expectedUserID {
+				t.Fatalf("Expected UserID %v, got %v", expectedUserID, userID)
 			}
+		})
 
-			ctx = context.WithValue(ctx, "sid", session)
-			ctx = context.WithValue(ctx, USER_ID_KEY, session.Data.Passport.User.ID)
+		handler := sm.ValidateCookie(nextHandler)
+		handler.ServeHTTP(rr, req)
+	})
 
-			return ctx, nil
-		},
-	}
-	p := &PopSocket{
-		SessionStore: mockStore,
-	}
+	t.Run("Valid Cookie and Session With DiscordID", func(t *testing.T) {
+		mockStore := &MockSessionStore{
+			FindFunc: func(ctx context.Context, sid string) (Session, error) {
+				return Session{
+					SID: expectedSID,
+					Data: SessionData{
+						Passport: Passport{
+							User: User{
+								ID:        0,
+								DiscordID: &expectedDiscordID,
+							},
+						},
+					},
+				}, nil
+			},
+			UserFromDiscordIDFunc: func(ctx context.Context, discordID string) (int, error) {
+				if discordID == expectedDiscordID {
+					return expectedUserID, nil
+				}
+				return 0, fmt.Errorf(SESSION_UNAUTHORIZED)
+			},
+		}
+		sm := NewSessionMiddleware(mockStore)
 
-	handlerToTest := p.checkCookie(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session, ok := r.Context().Value("sid").(*Session)
-		if !ok {
-			http.Error(w, "Unable to retrieve session from context", http.StatusInternalServerError)
-			return
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "connect.sid", Value: cookie})
+		rr := httptest.NewRecorder()
+
+		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := r.Context().Value(USER_ID_KEY)
+			if userID != expectedUserID {
+				t.Fatalf("Expected UserID %v, got %v", expectedUserID, userID)
+			}
+		})
+
+		handler := sm.ValidateCookie(nextHandler)
+		handler.ServeHTTP(rr, req)
+	})
+	t.Run("Unable to extract session id", func(t *testing.T) {
+		mockStore := &MockSessionStore{
+			FindFunc: func(ctx context.Context, sid string) (Session, error) {
+				return Session{
+					SID: "s9-fail",
+				}, nil
+			},
+		}
+		sm := NewSessionMiddleware(mockStore)
+
+		req, err := http.NewRequest("GET", "/test", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.AddCookie(&http.Cookie{Name: "connect.sid", Value: "s:BadCookie"})
+
+		rr := httptest.NewRecorder()
+		nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Error("Next handler should not have been called")
+		})
+
+		handler := sm.ValidateCookie(nextHandler)
+		handler.ServeHTTP(rr, req)
+
+		if status := rr.Code; status != http.StatusUnauthorized {
+			t.Errorf("Handler returned wrong status code: got %v want %v", status, http.StatusUnauthorized)
 		}
 
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(session)
-	}))
+		if strings.TrimSpace(rr.Body.String()) != SESSION_UNAUTHORIZED {
+			t.Errorf("Expected error message '%s', got '%s'.", SESSION_UNAUTHORIZED, rr.Body.String())
+		}
+	})
 
-	req, err := http.NewRequest("GET", "/", nil)
-	if err != nil {
-		t.Fatalf("Could not create request: %v", err)
-	}
-	req.AddCookie(&http.Cookie{Name: "connect.sid", Value: cookie})
+	t.Run("Invalid Session ID", func(t *testing.T) {
+		mockStore := &MockSessionStore{
+			FindFunc: func(ctx context.Context, sid string) (Session, error) {
+				return Session{SID: "invalid-sid"}, fmt.Errorf(SESSION_ERROR)
+			},
+		}
+		sm := NewSessionMiddleware(mockStore)
 
-	rr := httptest.NewRecorder()
-	handlerToTest.ServeHTTP(rr, req)
+		req := httptest.NewRequest("GET", "/", nil)
+		req.AddCookie(&http.Cookie{Name: "connect.sid", Value: expectedDiscordID})
 
-	var session Session
-	json.Unmarshal(rr.Body.Bytes(), &session)
+		rr := httptest.NewRecorder()
+		handler := sm.ValidateCookie(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		}))
+		handler.ServeHTTP(rr, req)
 
-	if session.SID != expectedSID {
-		t.Errorf("Expected sid '%s', got '%s'", expectedSID, session.SID)
-	}
-
-	if *session.Data.Passport.User.ID != expectedUserID {
-		t.Errorf("Expected UserID '%s', got '%d'", expectedUserID, session.Data.Passport.User.ID)
-	}
-}
-
-// TestCheckCookie_WithoutCookie calls `checkCookie` middleware without a connect.sid cookie to
-// ensure the http request is closed with the StatusUnauthorized code.
-func TestCheckCookie_WithoutCookie(t *testing.T) {
-	p := &PopSocket{}
-	expectedBody := "Unauthorized: Missing or invalid session\n"
-
-	handlerToTest := p.checkCookie(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	req, err := http.NewRequest("GET", "/", nil)
-	if err != nil {
-		t.Fatalf("Could not create request: %v", err)
-	}
-
-	rr := httptest.NewRecorder()
-	handlerToTest.ServeHTTP(rr, req)
-
-	if status := rr.Code; status != http.StatusUnauthorized {
-		t.Errorf("Expected status code %d, got %d", http.StatusUnauthorized, status)
-	}
-
-	if rr.Body.String() != expectedBody {
-		t.Errorf("Expected response body '%s', got '%s'", expectedBody, rr.Body.String())
-	}
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("Expected status Unauthorized, got %v", rr.Code)
+		}
+	})
 }

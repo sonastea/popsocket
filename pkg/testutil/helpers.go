@@ -1,7 +1,10 @@
 package testutil
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -23,14 +26,18 @@ func createRandomSecretKey() (string, error) {
 
 // CreateSignedCookie generates a signed connect.sid cookie for testing.
 func CreateSignedCookie(sid, secretKey string) (string, error) {
-	signature, err := util.CalculateHMAC(sid, secretKey)
-	if err != nil {
-		return "", err
-	}
+	mac := hmac.New(sha256.New, []byte(secretKey))
+	mac.Write([]byte(sid))
+
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	signature = util.UrlToStandardBase64(signature)
 
 	signedValue := fmt.Sprintf("s:%s.%s", sid, signature)
-
 	return url.QueryEscape(signedValue), nil
+}
+
+func UrlToStandardBase64(signature string) {
+	panic("unimplemented")
 }
 
 // SetRandomTestSecretKey sets a random session secret key in the environment for testing.

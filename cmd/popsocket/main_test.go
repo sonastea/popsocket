@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,9 +62,8 @@ func TestRun(t *testing.T) {
 			t.Fatalf("Failed to read response body: %v", readErr)
 		}
 
-		expectedBody := "Unauthorized: Missing or invalid session\n"
-		if string(body) != expectedBody {
-			t.Fatalf("Expected body '%v', got '%v'", expectedBody, string(body))
+		if strings.TrimSpace(string(body)) != popsocket.SESSION_UNAUTHORIZED {
+			t.Fatalf("Expected body '%v', got '%v'", popsocket.SESSION_UNAUTHORIZED, string(body))
 		}
 	}
 

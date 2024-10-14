@@ -16,16 +16,22 @@ func UrlToStandardBase64(s string) string {
 	return s
 }
 
-// CalculateHMAC calculates the HMAC-SHA256 signature for a given value and secret key.
-func CalculateHMAC(value, secret string) (string, error) {
-	h := hmac.New(sha256.New, []byte(secret))
-	_, err := h.Write([]byte(value))
-	if err != nil {
-		return "", fmt.Errorf("Unable to write HMAC: %w", err)
+// CalculateHMAC calculates the expected HMAC-SHA256 signature for a given value, secret,
+// and signature. Comparing the expected signature to the given signature
+// and returning the outcome as a bool.
+func CalculateHMAC(value, secret, sig string) bool {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(value))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	expected = UrlToStandardBase64(expected)
+	sig = UrlToStandardBase64(sig)
+
+	if hmac.Equal([]byte(expected), []byte(sig)) {
+		return true
 	}
 
-	signature := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
-	return signature, nil
+	return false
 }
 
 // DecodeCookie decodes the URL-encoded cookie value and verifies its HMAC signature.
@@ -47,20 +53,12 @@ func DecodeCookie(str string, secret string) (string, error) {
 		return "", fmt.Errorf("Invalid signed cookie format")
 	}
 
-	originalValue := parts[0]
+	originalSID := parts[0]
 	signature := parts[1]
 
-	expected, err := CalculateHMAC(originalValue, secret)
-	if err != nil {
+	if ok := CalculateHMAC(originalSID, secret, signature); !ok {
 		return "", fmt.Errorf("Unable to calculate HMAC: %w", err)
 	}
 
-	expected = UrlToStandardBase64(expected)
-	signature = UrlToStandardBase64(signature)
-
-	if !hmac.Equal([]byte(expected), []byte(signature)) {
-		return "", fmt.Errorf("Expected signature %v, got %v", expected, signature)
-	}
-
-	return originalValue, nil
+	return originalSID, nil
 }
