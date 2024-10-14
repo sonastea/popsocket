@@ -237,7 +237,7 @@ func (p *PopSocket) removeClient(client *Client) {
 	delete(p.clients, client)
 }
 
-// getClientCount returns the number of connected clients.
+// totalClients returns the total number of connected clients.
 func (p *PopSocket) totalClients() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -307,6 +307,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("%+v \n", keys) */
 }
 
+// SetupRoutes registers the http routes for the PopSocket server.
 func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
 	mux.HandleFunc("/", p.ValidateCookie(p.ServeWsHandle))
 

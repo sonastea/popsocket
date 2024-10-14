@@ -30,6 +30,7 @@ func (c *Client) ID() int {
 	return c.UserID
 }
 
+// newClient returns an instance of Client with the corresponding user metadata.
 func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Client {
 	client := &Client{
 		connID: connKey,
@@ -47,7 +48,8 @@ func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Clien
 	return client
 }
 
-// messageReceiver listens for incoming messages from the client and processes them based on the message type.
+// messageReceiver listens for incoming messages from the client
+// and processes them based on the message type.
 func (p *PopSocket) messageReceiver(ctx context.Context, client client) {
 	for {
 		select {
