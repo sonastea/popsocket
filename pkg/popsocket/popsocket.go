@@ -2,20 +2,18 @@ package popsocket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/sonastea/popsocket/pkg/db"
+	"github.com/sonastea/popsocket/pkg/config"
 	"github.com/valkey-io/valkey-go"
 )
 
@@ -51,11 +49,6 @@ var (
 
 type option func(ps *PopSocket) error
 
-type Client struct {
-	id   string
-	conn *websocket.Conn
-}
-
 type PopSocketInterface interface {
 	LogDebug(string, ...any)
 	LogError(string, ...any)
@@ -64,18 +57,25 @@ type PopSocketInterface interface {
 
 	Start(ctx context.Context) error
 	ServeWsHandle(w http.ResponseWriter, r *http.Request)
+	SetupRoutes(mux *http.ServeMux) error
 }
 
 type PopSocket struct {
-	clients    map[*Client]bool
 	httpServer *http.Server
 	logger     *slog.Logger
 	mu         sync.RWMutex
 	Valkey     valkey.Client
+
+	clients map[client]bool
+
+	MessageStore
+	SessionMiddleware
 }
 
-// init initializes default allowed origins for the websocket connections.
+// init loads the app's environment variables and default
+// allowed origins for the websocket connections.
 func init() {
+	config.LoadEnvVars()
 	loadAllowedOrigins()
 }
 
@@ -95,7 +95,7 @@ func loadAllowedOrigins() {
 // New initializes a new PopSocket with optional configurations.
 func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 	ps := &PopSocket{
-		clients: make(map[*Client]bool),
+		clients: make(map[client]bool),
 		httpServer: &http.Server{
 			Addr:         ":80",
 			ReadTimeout:  readTimeout,
@@ -161,6 +161,22 @@ func WithIdleTimeout(timeout time.Duration) option {
 	}
 }
 
+// WithMessageStore allows passing a custom message store to PopSocket to utilize.
+func WithMessageStore(store MessageStore) option {
+	return func(ps *PopSocket) error {
+		ps.MessageStore = store
+		return nil
+	}
+}
+
+// WithSessionMiddleware allows passing a custom session middleware to PopSocket to utilize.
+func WithSessionMiddleware(middleware SessionMiddleware) option {
+	return func(ps *PopSocket) error {
+		ps.SessionMiddleware = middleware
+		return nil
+	}
+}
+
 // Start launches the PopSocket HTTP server and manages graceful shutdown.
 func (p *PopSocket) Start(ctx context.Context) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGKILL)
@@ -221,7 +237,7 @@ func (p *PopSocket) removeClient(client *Client) {
 	delete(p.clients, client)
 }
 
-// getClientCount returns the number of connected clients.
+// totalClients returns the total number of connected clients.
 func (p *PopSocket) totalClients() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -238,12 +254,8 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := &Client{
-		conn: conn,
-		id:   r.Header.Get("Sec-Websocket-Key"),
-	}
-
 	ctx, cancel := context.WithCancel(r.Context())
+	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
 
 	p.addClient(client)
 	p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
@@ -251,7 +263,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		cancel()
 		p.removeClient(client)
-		p.LogInfo(fmt.Sprintf("Client %s disconnected. Remaining size of connection pool: %v", client.id, p.totalClients()))
+		p.LogInfo(fmt.Sprintf("Client %s disconnected. Remaining size of connection pool: %v", client.connID, p.totalClients()))
 		conn.Close(websocket.StatusNormalClosure, "Client disconnected")
 	}()
 
@@ -266,13 +278,13 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		done <- struct{}{}
 	}()
 	go func() {
-		p.heartbeat(ctx, client)
+		p.heartbeat(ctx, client, heartbeatPeriod)
 		done <- struct{}{}
 	}()
 
 	select {
 	case <-ctx.Done():
-		p.LogInfo(fmt.Sprintf("Context done for client %s. Exiting ServeWsHandle.", client.id))
+		p.LogInfo(fmt.Sprintf("Context done for client %s. Exiting ServeWsHandle.", client.connID))
 	case <-done:
 		cancel()
 	}
@@ -295,96 +307,16 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 			fmt.Printf("%+v \n", keys) */
 }
 
-// messageReceiver listens for incoming messages from the client and processes them based on the message type.
-func (p *PopSocket) messageReceiver(ctx context.Context, client *Client) {
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Printf("message receiver done")
-			return
+// SetupRoutes registers the http routes for the PopSocket server.
+func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
+	mux.HandleFunc("/", p.ValidateCookie(p.ServeWsHandle))
 
-		default:
-			_, msg, err := client.conn.Read(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				if websocket.CloseStatus(err) != -1 {
-					p.LogWarn(fmt.Sprintf("WebSocket closed for client %s: %v", client.id, err))
-					return
-				}
-				p.LogWarn(fmt.Sprintf("Error reading from client %s: %v", client.id, err))
-				return
-			}
-
-			var recv Message
-			err = json.Unmarshal(msg, &recv)
-			if err != nil {
-				p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %s, got %s", client.id, string(msg)))
-				continue
-			}
-
-			switch recv.Event {
-			case MessageType.Connect:
-				msg, err := json.Marshal(&Message{Event: MessageType.Connect, Content: "pong!"})
-				if err != nil {
-					p.LogError("Error marshalling connect message: %w", err)
-				}
-
-				err = client.conn.Write(ctx, websocket.MessageText, msg)
-
-			case MessageType.Conversations:
-				_, _ = db.NewPostgres(ctx, "postgresql://postgres:postgres@localhost:5432/kpoppop")
-
-				userID, _ := strconv.Atoi("1")
-				conversations, err := db.GetMessages(ctx, userID)
-				if err != nil {
-					p.LogError("Error getting client's conversations: %w", err)
-				}
-				convos, err := json.Marshal(conversations.Conversations)
-				if err != nil {
-					p.LogError("Error marshalling conversations: %w", err)
-				}
-
-				msg, _ := json.Marshal(Message{
-					Event:   MessageType.Conversations,
-					Content: fmt.Sprintf(`["%s", %s]`, MessageType.Conversations, string(convos)),
-				})
-
-				err = client.conn.Write(ctx, websocket.MessageText, msg)
-
-			default:
-				p.LogInfo(fmt.Sprintf("received: %+v", recv))
-
-			}
-		}
-	}
-}
-
-// messageSender dispatches messages from the PopSocket to the associated client.
-func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
-	t := time.NewTicker(1 * time.Second)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			err := client.conn.Write(ctx, websocket.MessageText, []byte(client.id))
-			if err != nil {
-				if ctx.Err() != nil {
-					p.LogWarn(fmt.Sprintf("Error writing to client %s: %v", client.id, err))
-					return
-				}
-			}
-		}
-	}
+	return nil
 }
 
 // heartbeat sends periodic ping messages to the client to ensure the connection is still active.
-func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
-	ticker := time.NewTimer(heartbeatPeriod)
+func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.Duration) {
+	ticker := time.NewTimer(period)
 	defer ticker.Stop()
 	client.conn.SetReadLimit(maxMessageSize)
 
@@ -393,14 +325,15 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// TODO: Validate session has not expired, close connection if that's not the case.
 			err := client.conn.Ping(ctx)
 			if err != nil {
 				p.LogInfo(fmt.Sprintf("[%s] ping error: %+v \n", time.Now().Local(), err))
 				client.conn.Close(websocket.StatusPolicyViolation, "Pong not received.")
 				return
 			}
-			ticker.Reset(heartbeatPeriod)
-			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %s", client.id))
+			ticker.Reset(period)
+			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %v", client.ID()))
 		}
 	}
 }

@@ -2,6 +2,7 @@ package popsocket
 
 import (
 	"log/slog"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -41,5 +42,42 @@ func TestNewLoggerConcurrency(t *testing.T) {
 		if loggerInstances[i] != loggerInstances[0] {
 			t.Errorf("Logger instance is not singleton, instance %d differs from instance 0", i)
 		}
+	}
+}
+
+// TestLogger ensures that the returned logger is a singleton instance.
+func TestLoggerSingleton(t *testing.T) {
+	t.Parallel()
+
+	logger1 := newLogger()
+	logger2 := newLogger()
+	logger3 := newLogger()
+	logger4 := newLogger()
+
+	if logger1 != logger2 {
+		t.Errorf("NewLogger should return the same instance, got logger1:%v and logger2:%v", logger1, logger2)
+	}
+
+	if logger2 != logger3 {
+		t.Errorf("NewLogger should return the same instance, got logger2:%v and logger3:%v", logger2, logger3)
+	}
+
+	if logger3 != logger4 {
+		t.Errorf("NewLogger should return the same instance, got logger3:%v and logger4:%v", logger3, logger4)
+	}
+
+	if logger4 != logger1 {
+		t.Errorf("NewLogger should return the same instance, got logger4:%v and logger1:%v", logger4, logger1)
+	}
+}
+
+func TestLogger(t *testing.T) {
+	t.Parallel()
+
+	logger := Logger()
+	loggerType := reflect.TypeOf(logger).Kind()
+
+	if reflect.TypeOf(logger) != reflect.TypeOf((*slog.Logger)(nil)) {
+		t.Errorf("logger expected to be type *slog.Logger, got %s", loggerType)
 	}
 }
