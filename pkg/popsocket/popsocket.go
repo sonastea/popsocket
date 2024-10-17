@@ -267,8 +267,8 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 
 	<-ctx.Done()
 
-  conn.Close(websocket.StatusNormalClosure, "Client disconnected")
-  p.removeClient(client)
+	conn.Close(websocket.StatusNormalClosure, "Client disconnected")
+	p.removeClient(client)
 	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 
 	/* clientId := "1"

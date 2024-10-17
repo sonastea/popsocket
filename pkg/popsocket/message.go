@@ -10,6 +10,7 @@ import (
 
 type MessageStore interface {
 	Convos(ctx context.Context, userID int) (*ConversationsResponse, error)
+	UpdateAsRead(ctx context.Context, msg ContentMarkAsRead) (ContentMarkAsReadResponse, error)
 }
 
 type MessageService struct {
@@ -51,6 +52,14 @@ type ContentMarkAsRead struct {
 	To      int    `json:"to"`
 	Content string `json:"content"`
 	Read    bool   `json:"read"`
+}
+
+// ContentMarkAsReadResponse is the struct representing content from a EventMessageType.MarkAsRead
+type ContentMarkAsReadResponse struct {
+	Convid string `json:"convid"`
+	To     int    `json:"to"`
+	Unread int    `json:"unread"`
+	Read   bool   `json:"read"`
 }
 
 // Type returns the underlying type as a string.
@@ -108,21 +117,21 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
 	query := `
         WITH user_conversations AS (
           SELECT DISTINCT c.id, c.convid
-          FROM kpoppop."Conversation" c
-          JOIN kpoppop."_ConversationToUser" cu ON c.id = cu."A"
+          FROM "Conversation" c
+          JOIN "_ConversationToUser" cu ON c.id = cu."A"
           WHERE cu."B" = $1
         ),
         conversation_users AS (
           SELECT uc.id, uc.convid, u.id as user_id, u.username, u.displayname, u.photo, u.status
           FROM user_conversations uc
-          JOIN kpoppop."_ConversationToUser" cu ON uc.id = cu."A"
-          JOIN kpoppop."User" u ON cu."B" = u.id
+          JOIN "_ConversationToUser" cu ON uc.id = cu."A"
+          JOIN "User" u ON cu."B" = u.id
           WHERE u.id != $1
         ),
         conversation_messages AS (
           SELECT c.id, c.convid, m.*
           FROM user_conversations c
-          LEFT JOIN kpoppop."Message" m ON c.convid = m."convId"
+          LEFT JOIN "Message" m ON c.convid = m."convId"
         )
         SELECT
           cm."recipientId" as id, cu.convid, cu.username, cu.displayname, cu.photo, cu.status,
@@ -196,4 +205,26 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
 	}
 
 	return result, nil
+}
+
+func (ms *messageStore) UpdateAsRead(ctx context.Context, msg ContentMarkAsRead) (ContentMarkAsReadResponse, error) {
+	query := `
+    UPDATE "Message"
+    SET read = true
+    WHERE "convId" = $1 AND "recipientId" = $2 AND read = false
+  `
+
+	_, err := ms.db.Exec(ctx, query, msg.Convid, msg.To)
+	if err != nil {
+		return ContentMarkAsReadResponse{}, err
+	}
+
+	// 42["read message",{"convid":"1dc1f881-f749-40a2-a4af-0c384b6840de","unread":0,"to":1,"read":true}]%
+
+	return ContentMarkAsReadResponse{
+		Convid: msg.Convid,
+		Unread: 0,
+		To:     msg.To,
+		Read:   true,
+	}, nil
 }

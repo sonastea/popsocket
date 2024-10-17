@@ -124,10 +124,21 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 					err = client.Conn().Write(ctx, websocket.MessageText, msg)
 
 				case EventMessageType.MarkAsRead.Type():
-          var content ContentMarkAsRead
-          json.Unmarshal(rawMap["content"], &content)
+					var content ContentMarkAsRead
+					json.Unmarshal(rawMap["content"], &content)
 
-					p.LogWarn(fmt.Sprintf("MarkAsRead %+v", content))
+					m, err := p.messageStore.UpdateAsRead(ctx, content)
+					if err != nil {
+						p.LogWarn(err.Error(), m)
+					}
+
+					contentJSON, _ := json.Marshal(m)
+					msg, err := json.Marshal(EventMessage{Event: EventMessageType.MarkAsRead, Content: string(contentJSON)})
+					if err != nil {
+						p.LogError("Error marshalling connect message: %w", err)
+					}
+
+					err = client.Conn().Write(ctx, websocket.MessageText, msg)
 
 				case EventMessageType.SetRecipient.Type():
 

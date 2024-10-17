@@ -15,7 +15,7 @@ func TestFuncType(t *testing.T) {
 		},
 		{
 			nameAndType:  "Message",
-			contractType: &Message{},
+			contractType: &Message{Convid: "t-e-s-t"},
 		},
 	}
 
