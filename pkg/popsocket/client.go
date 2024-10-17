@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"time"
 
 	"github.com/coder/websocket"
 )
@@ -50,63 +48,95 @@ func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Clien
 
 // messageReceiver listens for incoming messages from the client
 // and processes them based on the message type.
-func (p *PopSocket) messageReceiver(ctx context.Context, client client) {
+func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel context.CancelFunc) {
+	defer cancel()
+
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("message receiver done")
+			p.LogInfo("Context done, message receiver stopping")
 			return
 
 		default:
 			_, msg, err := client.Conn().Read(ctx)
 			if err != nil {
+				// Handle contextion cancellation explicitly
 				if ctx.Err() != nil {
+					p.LogInfo("Context was canceled, exiting messageReceiver.")
+					client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
 					return
 				}
-				if websocket.CloseStatus(err) != -1 {
-					p.LogWarn(fmt.Sprintf("WebSocket closed for client %v: %v", client, err))
+
+				closeStatus := websocket.CloseStatus(err)
+				if closeStatus != -1 {
+					if closeStatus == websocket.StatusGoingAway || closeStatus == websocket.StatusNoStatusRcvd {
+						return
+					}
+
+					p.LogWarn(fmt.Sprintf("WebSocket closed for client %v, err: %+v", client.ID(), err))
+					client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
 					return
 				}
-				p.LogWarn(fmt.Sprintf("Error reading from client %v: %v", client, err))
+
+				p.LogWarn(fmt.Sprintf("Error reading from client %v: %v", client.ID(), err))
 				return
 			}
 
-			var recv EventMessage
-			err = json.Unmarshal(msg, &recv)
+			var rawMap map[string]json.RawMessage
+			err = json.Unmarshal(msg, &rawMap)
 			if err != nil {
 				p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %v, got %s", client, string(msg)))
 				continue
 			}
 
-			switch recv.Event {
-			case EventMessageType.Connect:
-				msg, err := json.Marshal(&EventMessage{Event: EventMessageType.Connect, Content: "pong!"})
+			if _, ok := rawMap["event"]; ok {
+				var recv EventMessage
+				err = json.Unmarshal(rawMap["event"], &recv.Event)
 				if err != nil {
-					p.LogError("Error marshalling connect message: %w", err)
+					p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %v, got %+v. Error: %v", client.ID(), rawMap, err))
 				}
 
-				err = client.Conn().Write(ctx, websocket.MessageText, msg)
+				switch recv.Event.Type() {
+				case EventMessageType.Connect.Type():
+					json.Unmarshal(msg, &recv.Content)
+					msg, err := json.Marshal(&EventMessage{Event: EventMessageType.Connect, Content: "pong!"})
+					if err != nil {
+						p.LogError("Error marshalling connect message: %w", err)
+					}
+					err = client.Conn().Write(ctx, websocket.MessageText, msg)
 
-			case EventMessageType.Conversations:
-				conversations, err := p.MessageStore.Convos(ctx, client.ID())
-				if err != nil {
-					p.LogError("Error getting client's conversations: %w", err)
+				case EventMessageType.Conversations.Type():
+					json.Unmarshal(msg, &recv.Content)
+					conversations, err := p.messageStore.Convos(ctx, client.ID())
+					if err != nil {
+						p.LogError("Error getting client's conversations: %w", err)
+					}
+					convos, err := json.Marshal(conversations.Conversations)
+					if err != nil {
+						p.LogError("Error marshalling conversations: %w", err)
+					}
+
+					msg, _ := json.Marshal(EventMessage{
+						Event:   EventMessageType.Conversations,
+						Content: fmt.Sprintf(`["%s", %s]`, EventMessageType.Conversations, string(convos)),
+					})
+
+					err = client.Conn().Write(ctx, websocket.MessageText, msg)
+
+				case EventMessageType.MarkAsRead.Type():
+          var content ContentMarkAsRead
+          json.Unmarshal(rawMap["content"], &content)
+
+					p.LogWarn(fmt.Sprintf("MarkAsRead %+v", content))
+
+				case EventMessageType.SetRecipient.Type():
+
+				default:
+					p.LogWarn(fmt.Sprintf("received: %+v", recv))
 				}
-				convos, err := json.Marshal(conversations.Conversations)
-				if err != nil {
-					p.LogError("Error marshalling conversations: %w", err)
-				}
 
-				msg, _ := json.Marshal(EventMessage{
-					Event:   EventMessageType.Conversations,
-					Content: fmt.Sprintf(`["%s", %s]`, EventMessageType.Conversations, string(convos)),
-				})
-
-				err = client.Conn().Write(ctx, websocket.MessageText, msg)
-
-			default:
-				p.LogInfo(fmt.Sprintf("received: %+v", recv))
-
+			} else if _, ok := rawMap["convId"]; ok {
+				p.LogWarn(fmt.Sprintf("message received: %+v", msg))
 			}
 		}
 	}
@@ -114,21 +144,10 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client client) {
 
 // messageSender dispatches messages from the PopSocket to the associated client.
 func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
-	t := time.NewTicker(1 * time.Second)
-	defer t.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			err := client.conn.Write(ctx, websocket.MessageText, []byte(strconv.Itoa(client.ID())))
-			if err != nil {
-				if ctx.Err() != nil {
-					p.LogWarn(fmt.Sprintf("Error writing to client %d: %v", client.ID(), err))
-					return
-				}
-			}
 		}
 	}
 }

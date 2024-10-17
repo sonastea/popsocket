@@ -17,13 +17,13 @@ const (
 )
 
 type SessionMiddleware struct {
-	store SessionStore
+	sessionStore SessionStore
 }
 
-// NewSessionMiddleware returns an instance of SessionMiddleware
+// NewSessionMiddleware returns an instance of SessionMiddleware.
 func NewSessionMiddleware(store SessionStore) SessionMiddleware {
 	return SessionMiddleware{
-		store: store,
+		store,
 	}
 }
 
@@ -44,7 +44,7 @@ func (sm *SessionMiddleware) ValidateCookie(next http.HandlerFunc) http.HandlerF
 		}
 
 		ctx := r.Context()
-		session, err := sm.store.Find(ctx, sid)
+		session, err := sm.sessionStore.Find(ctx, sid)
 		if err != nil {
 			http.Error(w, SESSION_UNAUTHORIZED, http.StatusUnauthorized)
 			return
@@ -61,7 +61,7 @@ func (sm *SessionMiddleware) bindToContext(ctx context.Context, session Session)
 		ctx = context.WithValue(ctx, USER_ID_KEY, session.Data.Passport.User.ID)
 	} else if session.Data.Passport.User.DiscordID != nil {
 		discordID := *session.Data.Passport.User.DiscordID
-		userID, err := sm.store.UserFromDiscordID(ctx, discordID)
+		userID, err := sm.sessionStore.UserFromDiscordID(ctx, discordID)
 		if err == nil {
 			ctx = context.WithValue(ctx, USER_ID_KEY, userID)
 			ctx = context.WithValue(ctx, DISCORD_ID_KEY, discordID)

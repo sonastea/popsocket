@@ -12,6 +12,14 @@ type MessageStore interface {
 	Convos(ctx context.Context, userID int) (*ConversationsResponse, error)
 }
 
+type MessageService struct {
+	messageStore MessageStore
+}
+
+type messageStore struct {
+	db db.DB
+}
+
 // MessageInterface defines a contract for all message types.
 type MessageInterface interface {
 	Type() string
@@ -37,9 +45,22 @@ type EventMessage struct {
 	Content string           `json:"content"`
 }
 
+// ContentMarkAsRead is the struct representing content from a EventMessageType.MarkAsRead
+type ContentMarkAsRead struct {
+	Convid  string `json:"convid"`
+	To      int    `json:"to"`
+	Content string `json:"content"`
+	Read    bool   `json:"read"`
+}
+
+// Type returns the underlying type as a string.
+func (m messageEventType) Type() string {
+	return string(m)
+}
+
 // Type returns the type of the message to distinguish its role.
-func (m *EventMessage) Type() string {
-	return "EventMessage"
+func (em *EventMessage) Type() string {
+	return string(em.Event)
 }
 
 type ConversationsResponse struct {
@@ -67,16 +88,19 @@ type Conversation struct {
 	Unread      int       `json:"unread"`
 }
 
-type messageStore struct {
-	db db.DB
+// NewMessageService creates a new instance of MessageService.
+func NewMessageService(store MessageStore) MessageService {
+	return MessageService{
+		store,
+	}
 }
 
-// NewMessageStore creates a new instance of messageStore.
+// NewMessageStore creates a new instance of sessionStore.
 func NewMessageStore(db db.DB) *messageStore {
 	return &messageStore{db: db}
 }
 
-func (ms *messageStore) Type() string {
+func (m *Message) Type() string {
 	return "Message"
 }
 

@@ -25,13 +25,14 @@ func Run(ctx context.Context, valkey valkey.Client) error {
 	messageStore := popsocket.NewMessageStore(db)
 	sessionStore := popsocket.NewSessionStore(db)
 
+	messageService := popsocket.NewMessageService(messageStore)
 	sessionMiddleware := popsocket.NewSessionMiddleware(sessionStore)
 
 	ps, err := popsocket.New(
 		valkey,
 		popsocket.WithServeMux(mux),
 		popsocket.WithAddress(os.Getenv("POPSOCKET_ADDR")),
-		popsocket.WithMessageStore(messageStore),
+		popsocket.WithMessageService(messageService),
 		popsocket.WithSessionMiddleware(sessionMiddleware),
 	)
 	if err != nil {

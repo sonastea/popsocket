@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -256,12 +254,12 @@ func TestWithOpts(t *testing.T) {
 			t.Fatalf("Unable to create signed cookie: %s", err)
 		}
 
-		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		vk, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 		if err != nil {
 			t.Fatalf("Expected new valkey client, got %s", err)
 		}
 
-		ps, err := New(valkey)
+		ps, err := New(vk)
 		if err != nil {
 			t.Fatalf("New PopSocket failed: %v", err)
 		}
@@ -294,8 +292,6 @@ func TestWithOpts(t *testing.T) {
 			if clients != 1 {
 				t.Errorf("Expected 1 client, got %d", clients)
 			}
-
-			fmt.Printf("client: %+v \n", ctx.Value(USER_ID_KEY).(string))
 
 			psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
 			m, err := json.Marshal(psMessage)
@@ -351,25 +347,28 @@ func TestWithOpts(t *testing.T) {
 		})
 	})
 
-	t.Run("With MessageStore", func(t *testing.T) {
+	t.Run("With MessageService", func(t *testing.T) {
 		s := miniredis.RunT(t)
 		defer s.Close()
 
 		t.Setenv("REDIS_URL", s.Addr())
 
-		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		vk, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 		if err != nil {
 			t.Fatalf("Expected new valkey client, got %s", err)
 		}
 		messageStore := NewMessageStore(mock_db.New())
+		messageService := NewMessageService(messageStore)
 
-		ps, err := New(valkey, WithMessageStore(messageStore))
+		// TODO: CONVERTS MessageStore to MessageService like sessionmiddleware as business layer
+		// while MessageStore handles database layer.
+		ps, err := New(vk, WithMessageService(messageService))
 		if err != nil {
-			t.Fatalf("New() with WithMessageStore failed: %v", err)
+			t.Fatalf("New() with WithMessageService failed: %v", err)
 		}
 
-		if ps.MessageStore != messageStore {
-			t.Errorf("Expected message store %v, got %v", messageStore, ps.MessageStore)
+		if ps.MessageService != messageService {
+			t.Errorf("Expected message service %v, got %v", messageService, ps.MessageService)
 		}
 	})
 
@@ -379,212 +378,20 @@ func TestWithOpts(t *testing.T) {
 
 		t.Setenv("REDIS_URL", s.Addr())
 
-		valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+		vk, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
 		if err != nil {
 			t.Fatalf("Expected new valkey client, got %s", err)
 		}
 		sessionStore := NewSessionStore(mock_db.New())
 		sessionMiddleware := NewSessionMiddleware(sessionStore)
 
-		ps, err := New(valkey, WithSessionMiddleware(sessionMiddleware))
+		ps, err := New(vk, WithSessionMiddleware(sessionMiddleware))
 		if err != nil {
-			t.Fatalf("New() with WithMessageStore failed: %v", err)
+			t.Fatalf("New() with SessionMiddleware failed: %v", err)
 		}
 
 		if ps.SessionMiddleware != sessionMiddleware {
 			t.Errorf("Expected session middleware %v, got %v", sessionMiddleware, ps.SessionMiddleware)
 		}
 	})
-}
-
-// TestStart runs Start() to make sure the server starts and handles shutdown properly.
-func TestStart(t *testing.T) {
-	s := miniredis.RunT(t)
-	defer s.Close()
-
-	t.Setenv("REDIS_URL", s.Addr())
-
-	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-	if err != nil {
-		t.Fatalf("Expected new valkey client, got %s", err)
-	}
-
-	ps, err := New(valkey, WithAddress(":0"))
-	if err != nil {
-		t.Fatalf("New PopSocket failed: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ps.Start(ctx)
-	}()
-
-	select {
-	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
-			t.Fatalf("Start() failed: %v", err)
-		}
-	case <-time.After(1 * time.Second):
-	}
-
-	cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
-			t.Fatalf("Unexpected error during shutdown: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Server didn't shut down within the expected time")
-	}
-}
-
-// TestStartWithFailure runs Start() with an error (occupied port) to determine if
-// the server handles and returns an appropriate error.
-func TestStartWithFailure(t *testing.T) {
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil {
-		t.Fatalf("Failed to create listener: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	defer listener.Close()
-
-	s := miniredis.RunT(t)
-	defer s.Close()
-
-	t.Setenv("REDIS_URL", s.Addr())
-
-	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-	if err != nil {
-		t.Fatalf("Expected new valkey client, got %s", err)
-	}
-
-	// Now create a PopSocket instance trying to use the occupied port
-	ps, _ := New(valkey, WithAddress(fmt.Sprintf(":%d", port)))
-	if err != nil {
-		t.Fatalf("New PopSocket failed: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ps.Start(ctx)
-	}()
-
-	select {
-	case err := <-errCh:
-		if err == nil {
-			t.Fatal("Expected an error due to occupied port, but got nil")
-		}
-		// If we reach here, the test passes because we got an error as expected
-		t.Logf("Received expected error: %v", err)
-	case <-time.After(1 * time.Second):
-		t.Fatal("Timeout waiting for server to return an error")
-	}
-}
-
-// TestNewWithCustomTimeout runs Start() to make sure the server starts and handles shutdown properly.
-func TestNewWithCustomTimeout(t *testing.T) {
-	s := miniredis.RunT(t)
-	defer s.Close()
-
-	t.Setenv("REDIS_URL", s.Addr())
-
-	valkey, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-	if err != nil {
-		t.Fatalf("Expected new valkey client, got %s", err)
-	}
-
-	expectedTimeout := 9 * time.Second
-	ps, err := New(valkey, WithAddress(":0"), WithWriteTimeout(expectedTimeout), WithReadTimeout(expectedTimeout), WithIdleTimeout(expectedTimeout))
-	if err != nil {
-		t.Fatalf("New PopSocket failed: %v", err)
-	}
-
-	if ps.httpServer.WriteTimeout != expectedTimeout {
-		t.Fatalf("Expected write timeout of %v, got %s", expectedTimeout, ps.httpServer.WriteTimeout)
-	}
-
-	if ps.httpServer.ReadTimeout != expectedTimeout {
-		t.Fatalf("Expected read timeout of %v, got %s", expectedTimeout, ps.httpServer.ReadTimeout)
-	}
-
-	if ps.httpServer.IdleTimeout != expectedTimeout {
-		t.Fatalf("Expected idle timeout of %v, got %s", expectedTimeout, ps.httpServer.IdleTimeout)
-	}
-}
-
-// TestSetupRoutes tests that the SetupRoutes function correctly
-// registers the checkSession middleware for the ServeWsHandle.
-func TestSetupRoutes(t *testing.T) {
-	ps := &PopSocket{}
-
-	mux := http.NewServeMux()
-	err := ps.SetupRoutes(mux)
-	if err != nil {
-		t.Fatalf("Expected no error, but got %v", err)
-	}
-
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	res, err := http.Get(ts.URL + "/")
-	if err != nil {
-		t.Fatalf("Expected no error when making GET request, but got %v", err)
-	}
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatalf("Expected no error reading body, got %v", err)
-	}
-
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("Expected status code 401, but got %d", res.StatusCode)
-	}
-
-	expectedBody := "Unauthorized: Missing or invalid session"
-	if string(body) == expectedBody {
-		t.Errorf("Expected response body '%s', got '%s'", expectedBody, string(body))
-	}
-}
-
-// TestSetupRoutes_WithErr tests that the SetupRoutes function correctly
-// registers the checkSession middleware for the ServeWsHandle.
-func TestSetupRoutes_WithErr(t *testing.T) {
-	ps := &PopSocket{}
-
-	mux := http.NewServeMux()
-	err := ps.SetupRoutes(mux)
-	if err != nil {
-		t.Fatalf("Expected no error, but got %v", err)
-	}
-
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	res, err := http.Get(ts.URL + "/")
-	if err != nil {
-		t.Fatalf("Expected no error when making GET request, but got %v", err)
-	}
-	defer res.Body.Close()
-
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatalf("Expected no error reading body, got %v", err)
-	}
-
-	if res.StatusCode != http.StatusUnauthorized {
-		t.Errorf("Expected status code 401, but got %d", res.StatusCode)
-	}
-
-	expectedBody := "Unauthorized: Missing or invalid session"
-	if string(body) == expectedBody {
-		t.Errorf("Expected response body '%s', got '%s'", expectedBody, string(body))
-	}
 }

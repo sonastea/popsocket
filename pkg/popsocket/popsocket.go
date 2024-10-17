@@ -68,7 +68,7 @@ type PopSocket struct {
 
 	clients map[client]bool
 
-	MessageStore
+	MessageService
 	SessionMiddleware
 }
 
@@ -161,10 +161,10 @@ func WithIdleTimeout(timeout time.Duration) option {
 	}
 }
 
-// WithMessageStore allows passing a custom message store to PopSocket to utilize.
-func WithMessageStore(store MessageStore) option {
+// WithMessageService allows passing a custom message store to PopSocket to utilize.
+func WithMessageService(service MessageService) option {
 	return func(ps *PopSocket) error {
-		ps.MessageStore = store
+		ps.MessageService = service
 		return nil
 	}
 }
@@ -255,39 +255,21 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
 
 	p.addClient(client)
 	p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
 
-	defer func() {
-		cancel()
-		p.removeClient(client)
-		p.LogInfo(fmt.Sprintf("Client %s disconnected. Remaining size of connection pool: %v", client.connID, p.totalClients()))
-		conn.Close(websocket.StatusNormalClosure, "Client disconnected")
-	}()
+	go p.messageReceiver(ctx, client, cancel)
+	go p.messageSender(ctx, client)
+	go p.heartbeat(ctx, client, heartbeatPeriod)
 
-	done := make(chan struct{})
+	<-ctx.Done()
 
-	go func() {
-		p.messageReceiver(ctx, client)
-		done <- struct{}{}
-	}()
-	go func() {
-		p.messageSender(ctx, client)
-		done <- struct{}{}
-	}()
-	go func() {
-		p.heartbeat(ctx, client, heartbeatPeriod)
-		done <- struct{}{}
-	}()
-
-	select {
-	case <-ctx.Done():
-		p.LogInfo(fmt.Sprintf("Context done for client %s. Exiting ServeWsHandle.", client.connID))
-	case <-done:
-		cancel()
-	}
+  conn.Close(websocket.StatusNormalClosure, "Client disconnected")
+  p.removeClient(client)
+	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 
 	/* clientId := "1"
 			hashKey := fmt.Sprintf("convosession:%s", clientId)
@@ -323,6 +305,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 	for {
 		select {
 		case <-ctx.Done():
+			client.conn.Close(websocket.StatusNormalClosure, "Heartbeat gone.")
 			return
 		case <-ticker.C:
 			// TODO: Validate session has not expired, close connection if that's not the case.
