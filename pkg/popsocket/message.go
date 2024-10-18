@@ -219,8 +219,6 @@ func (ms *messageStore) UpdateAsRead(ctx context.Context, msg ContentMarkAsRead)
 		return ContentMarkAsReadResponse{}, err
 	}
 
-	// 42["read message",{"convid":"1dc1f881-f749-40a2-a4af-0c384b6840de","unread":0,"to":1,"read":true}]%
-
 	return ContentMarkAsReadResponse{
 		Convid: msg.Convid,
 		Unread: 0,

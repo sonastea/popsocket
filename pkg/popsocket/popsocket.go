@@ -55,9 +55,10 @@ type PopSocketInterface interface {
 	LogInfo(string, ...any)
 	LogWarn(string, ...any)
 
-	Start(ctx context.Context) error
+	manageConnections(ctx context.Context)
 	ServeWsHandle(w http.ResponseWriter, r *http.Request)
 	SetupRoutes(mux *http.ServeMux) error
+	Start(ctx context.Context) error
 }
 
 type PopSocket struct {
@@ -66,7 +67,9 @@ type PopSocket struct {
 	mu         sync.RWMutex
 	Valkey     valkey.Client
 
-	clients map[client]bool
+	clients    map[client]bool
+	register   chan *Client
+	unregister chan *Client
 
 	MessageService
 	SessionMiddleware
@@ -103,8 +106,10 @@ func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 			IdleTimeout:  idleTimeout,
 			Handler:      http.NewServeMux(),
 		},
-		logger: newLogger(),
-		Valkey: valkey,
+		logger:     newLogger(),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
+		Valkey:     valkey,
 	}
 
 	// Apply any options passed to configure the PopSocket.
@@ -182,6 +187,8 @@ func (p *PopSocket) Start(ctx context.Context) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGKILL)
 	defer cancel()
 
+  go p.manageConnections(ctx)
+
 	serverErrors := make(chan error, 1)
 
 	go func() {
@@ -223,25 +230,30 @@ func (p *PopSocket) LogWarn(msg string, args ...any) {
 	p.logger.Warn(msg, args...)
 }
 
-// addClient safely adds a client to the clients map.
-func (p *PopSocket) addClient(client *Client) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.clients[client] = true
-}
-
-// removeClient safely removes a client from the clients map.
-func (p *PopSocket) removeClient(client *Client) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.clients, client)
-}
-
 // totalClients returns the total number of connected clients.
 func (p *PopSocket) totalClients() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return len(p.clients)
+}
+
+// manageConnections listens for client register/unregister events, and handles lifecycle events.
+func (p *PopSocket) manageConnections(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case client := <-p.register:
+			p.clients[client] = true
+			p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
+		case client := <-p.unregister:
+			if _, ok := p.clients[client]; ok {
+				delete(p.clients, client)
+				p.LogInfo(fmt.Sprintf("Left size of connection pool: %v", p.totalClients()))
+
+			}
+		}
+	}
 }
 
 // ServeWsHandle handles incoming websocket connection requests.
@@ -258,8 +270,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
 
-	p.addClient(client)
-	p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
+	p.register <- client
 
 	go p.messageReceiver(ctx, client, cancel)
 	go p.messageSender(ctx, client)
@@ -268,7 +279,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	<-ctx.Done()
 
 	conn.Close(websocket.StatusNormalClosure, "Client disconnected")
-	p.removeClient(client)
+	p.unregister <- client
 	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 
 	/* clientId := "1"
