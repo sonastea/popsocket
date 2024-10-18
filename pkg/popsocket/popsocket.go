@@ -187,7 +187,7 @@ func (p *PopSocket) Start(ctx context.Context) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGINT, syscall.SIGKILL)
 	defer cancel()
 
-  go p.manageConnections(ctx)
+	go p.manageConnections(ctx)
 
 	serverErrors := make(chan error, 1)
 
@@ -244,14 +244,19 @@ func (p *PopSocket) manageConnections(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case client := <-p.register:
+			p.mu.Lock()
 			p.clients[client] = true
+			p.mu.Unlock()
 			p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
+
 		case client := <-p.unregister:
 			if _, ok := p.clients[client]; ok {
+				p.mu.Lock()
 				delete(p.clients, client)
+				p.mu.Unlock()
 				p.LogInfo(fmt.Sprintf("Left size of connection pool: %v", p.totalClients()))
-
 			}
+
 		}
 	}
 }
@@ -262,7 +267,7 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 		OriginPatterns: AllowedOrigins,
 	})
 	if err != nil {
-		p.LogError(err.Error())
+		p.LogError("[ServeWs] ", "error", err.Error())
 		return
 	}
 

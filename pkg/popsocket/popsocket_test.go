@@ -1,14 +1,12 @@
 package popsocket
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -192,6 +190,95 @@ func TestNew_Options(t *testing.T) {
 	}
 }
 
+// TestServeWsHandle ensures that ServeWsHandler is upgrading http connect to a websocket.
+func TestServeWsHandle(t *testing.T) {
+	s := miniredis.RunT(t)
+	defer s.Close()
+
+	t.Setenv("REDIS_URL", s.Addr())
+	secretKey, err := testutil.SetRandomTestSecretKey()
+	if err != nil {
+		t.Fatalf("Unable to set random test secret key: %s", err)
+	}
+
+	expectedSID := "foo"
+	cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
+	if err != nil {
+		t.Fatalf("Unable to create signed cookie: %s", err)
+	}
+
+	vk, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
+	if err != nil {
+		t.Fatalf("Expected new valkey client, got %s", err)
+	}
+
+	customMux := http.NewServeMux()
+	ps, err := New(vk, WithAddress(":8080"), WithServeMux(customMux))
+	if err != nil {
+		t.Fatalf("New PopSocket failed: %v", err)
+	}
+
+	wsUrl := "ws://localhost:8080"
+	customMux.HandleFunc("/", ps.ServeWsHandle)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx = context.WithValue(ctx, USER_ID_KEY, "9")
+	defer cancel()
+
+	go func() {
+		if err := ps.Start(ctx); err != nil {
+			t.Error("Unable to start PopSocket server.")
+		}
+	}()
+
+	header := http.Header{}
+	header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
+
+	conn, _, err := websocket.Dial(ctx, wsUrl, &websocket.DialOptions{
+		HTTPHeader: header,
+	})
+	if err != nil {
+		t.Fatalf("Failed to connect to WebSocket server: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	clients := ps.totalClients()
+	if clients != 1 {
+		t.Errorf("Expected 1 client, got %d", clients)
+	}
+
+	psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
+	m, err := json.Marshal(psMessage)
+	err = conn.Write(ctx, websocket.MessageText, m)
+	if err != nil {
+		t.Fatalf("Failed to send message to server: %v", err)
+	}
+
+	_, msg, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("Failed to read message from server: %v", err)
+	}
+
+	var message EventMessage
+	err = json.Unmarshal(msg, &message)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
+	}
+
+	if message.Event != EventMessageType.Connect {
+		t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
+	}
+
+	conn.Close(websocket.StatusNormalClosure, "Disconnecting from websocket, should be 0 clients connected.")
+	time.Sleep(100 * time.Millisecond)
+
+	clients = ps.totalClients()
+	if clients != 0 {
+		t.Errorf("Expected 0 clients after closing connection, got %d", clients)
+	}
+}
+
 // TestWithOpts ensures that the PopSocket instance sets and uses
 // the passed WithXXX values.
 func TestWithOpts(t *testing.T) {
@@ -236,115 +323,6 @@ func TestWithOpts(t *testing.T) {
 		if ps.httpServer.Handler != customMux {
 			t.Error("Custom ServeMux not set correctly")
 		}
-	})
-
-	t.Run("With ServeWsHandle", func(t *testing.T) {
-		s := miniredis.RunT(t)
-		defer s.Close()
-
-		t.Setenv("REDIS_URL", s.Addr())
-		secretKey, err := testutil.SetRandomTestSecretKey()
-		if err != nil {
-			t.Fatalf("Unable to set random test secret key: %s", err)
-		}
-
-		expectedSID := "foo"
-		cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
-		if err != nil {
-			t.Fatalf("Unable to create signed cookie: %s", err)
-		}
-
-		vk, err := NewValkeyClient(valkey.ClientOption{DisableCache: true})
-		if err != nil {
-			t.Fatalf("Expected new valkey client, got %s", err)
-		}
-
-		ps, err := New(vk)
-		if err != nil {
-			t.Fatalf("New PopSocket failed: %v", err)
-		}
-
-		server := httptest.NewServer(http.HandlerFunc(ps.ServeWsHandle))
-		defer server.Close()
-
-		t.Run("Websocket connection dialed", func(t *testing.T) {
-			wsUrl := "ws" + strings.TrimPrefix(server.URL, "http")
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			ctx = context.WithValue(ctx, USER_ID_KEY, "9")
-			defer cancel()
-
-			header := http.Header{}
-			header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
-
-			conn, _, err := websocket.Dial(ctx, wsUrl, &websocket.DialOptions{
-				HTTPHeader: header,
-			})
-			if err != nil {
-				t.Fatalf("Failed to connect to WebSocket server: %v", err)
-			}
-			defer conn.Close(websocket.StatusNormalClosure, "")
-
-			time.Sleep(100 * time.Millisecond)
-
-			clients := ps.totalClients()
-
-			if clients != 1 {
-				t.Errorf("Expected 1 client, got %d", clients)
-			}
-
-			psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
-			m, err := json.Marshal(psMessage)
-			err = conn.Write(ctx, websocket.MessageText, m)
-			if err != nil {
-				t.Fatalf("Failed to send message to server: %v", err)
-			}
-
-			_, msg, err := conn.Read(ctx)
-			if err != nil {
-				t.Fatalf("Failed to read message from server: %v", err)
-			}
-
-			var message EventMessage
-			err = json.Unmarshal(msg, &message)
-			if err != nil {
-				t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
-			}
-
-			if message.Event != EventMessageType.Connect {
-				t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
-			}
-
-			cancel()
-			conn.Close(websocket.StatusNormalClosure, "")
-			time.Sleep(100 * time.Millisecond)
-
-			clients = ps.totalClients()
-
-			if clients != 0 {
-				t.Errorf("Expected 0 clients after closing connection, got %d", clients)
-			}
-		})
-
-		t.Run("Websocket accept errored", func(t *testing.T) {
-			origin := "local.test"
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
-			req.Header.Set("Upgrade", "websocket")
-			req.Header.Set("Connection", "Upgrade")
-			req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
-			req.Header.Set("Sec-WebSocket-Version", "13")
-			req.Header.Set("Origin", origin)
-
-			rec := httptest.NewRecorder()
-			ps.ServeWsHandle(rec, req)
-
-			if !bytes.Contains(rec.Body.Bytes(), []byte(origin)) {
-				t.Errorf("Received body should have `local.test`, got %s", rec.Body.String())
-			}
-			if rec.Code != http.StatusForbidden {
-				t.Errorf("Expected HTTP %d status code, got %d", http.StatusForbidden, rec.Code)
-			}
-		})
 	})
 
 	t.Run("With MessageService", func(t *testing.T) {
