@@ -29,7 +29,7 @@ func TestValidateCookie(t *testing.T) {
 
 	expectedSID := "s9foo"
 	expectedDiscordID := "9"
-	expectedUserID := 9
+	expectedUserID := int32(9)
 	cookie, err := testutil.CreateSignedCookie(expectedSID, secretKey)
 	if err != nil {
 		t.Fatalf("Unable to create signed cookie: %s", err)
@@ -83,7 +83,7 @@ func TestValidateCookie(t *testing.T) {
 					},
 				}, nil
 			},
-			UserFromDiscordIDFunc: func(ctx context.Context, discordID string) (int, error) {
+			UserFromDiscordIDFunc: func(ctx context.Context, discordID string) (int32, error) {
 				if discordID == expectedDiscordID {
 					return expectedUserID, nil
 				}

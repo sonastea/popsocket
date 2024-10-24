@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"time"
 
+	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"github.com/sonastea/popsocket/pkg/db"
 )
 
 type MessageStore interface {
-	Convos(ctx context.Context, userID int) (*ConversationsResponse, error)
-	UpdateAsRead(ctx context.Context, msg ContentMarkAsRead) (ContentMarkAsReadResponse, error)
+	Convos(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error)
+	UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAsRead) (*ipc.ContentMarkAsReadResponse, error)
 }
 
 type MessageService struct {
@@ -113,7 +114,7 @@ func (m *Message) Type() string {
 	return "Message"
 }
 
-func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsResponse, error) {
+func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error) {
 	query := `
         WITH user_conversations AS (
           SELECT DISTINCT c.id, c.convid
@@ -141,21 +142,22 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
         ORDER BY cu.id, cm."createdAt" desc
         `
 
-	rows, err := ms.db.Query(ctx, query, userID)
+	rows, err := ms.db.Query(ctx, query, user_id)
 	if err != nil {
 		return nil, fmt.Errorf("Error querying conversations: %w", err)
 	}
 	defer rows.Close()
 
-	conversationsMap := make(map[string]*Conversation)
+	conversationsMap := make(map[string]*ipc.Conversation)
 
 	for rows.Next() {
-		var conv Conversation
-		var msg Message
-		var recipientID, fromUserID *int
+		var conv ipc.Conversation
+		var msg ipc.Message
+		var recipientID, fromUserID *int32
+		var createdAt time.Time
 
 		err := rows.Scan(
-			&conv.ID,
+			&conv.Id,
 			&conv.Convid,
 			&conv.Username,
 			&conv.Displayname,
@@ -164,7 +166,7 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
 			&recipientID,
 			&fromUserID,
 			&msg.Content,
-			&msg.CreatedAt,
+			&createdAt,
 			&msg.FromSelf,
 			&msg.Read,
 		)
@@ -174,7 +176,7 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
 
 		existingConv, exists := conversationsMap[conv.Convid]
 		if !exists {
-			conv.Messages = []Message{}
+			conv.Messages = []*ipc.Message{}
 			conv.Unread = 0
 			conversationsMap[conv.Convid] = &conv
 			existingConv = &conv
@@ -187,7 +189,8 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
 		if fromUserID != nil {
 			msg.From = *fromUserID
 		}
-		existingConv.Messages = append(existingConv.Messages, msg)
+		msg.CreatedAt = createdAt.Format(time.RFC3339)
+		existingConv.Messages = append(existingConv.Messages, &msg)
 		if !msg.Read && !msg.FromSelf {
 			existingConv.Unread++
 		}
@@ -197,17 +200,17 @@ func (ms *messageStore) Convos(ctx context.Context, userID int) (*ConversationsR
 		return nil, fmt.Errorf("Error iterating rows: %w", err)
 	}
 
-	result := &ConversationsResponse{
-		Conversations: make([]Conversation, 0, len(conversationsMap)),
+	result := &ipc.ContentConversationsResponse{
+		Conversations: make([]*ipc.Conversation, 0, len(conversationsMap)),
 	}
 	for _, conv := range conversationsMap {
-		result.Conversations = append(result.Conversations, *conv)
+		result.Conversations = append(result.Conversations, conv)
 	}
 
 	return result, nil
 }
 
-func (ms *messageStore) UpdateAsRead(ctx context.Context, msg ContentMarkAsRead) (ContentMarkAsReadResponse, error) {
+func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAsRead) (*ipc.ContentMarkAsReadResponse, error) {
 	query := `
     UPDATE "Message"
     SET read = true
@@ -216,10 +219,10 @@ func (ms *messageStore) UpdateAsRead(ctx context.Context, msg ContentMarkAsRead)
 
 	_, err := ms.db.Exec(ctx, query, msg.Convid, msg.To)
 	if err != nil {
-		return ContentMarkAsReadResponse{}, err
+		return &ipc.ContentMarkAsReadResponse{}, err
 	}
 
-	return ContentMarkAsReadResponse{
+	return &ipc.ContentMarkAsReadResponse{
 		Convid: msg.Convid,
 		Unread: 0,
 		To:     msg.To,

@@ -190,8 +190,8 @@ func TestNew_Options(t *testing.T) {
 	}
 }
 
-// TestServeWsHandle ensures that ServeWsHandler is upgrading http connect to a websocket.
-func TestServeWsHandle(t *testing.T) {
+// TestServeWs ensures that ServeWs is upgrading a client's http connect to a websocket.
+func TestServeWs(t *testing.T) {
 	s := miniredis.RunT(t)
 	defer s.Close()
 
@@ -219,7 +219,9 @@ func TestServeWsHandle(t *testing.T) {
 	}
 
 	wsUrl := "ws://localhost:8080"
-	customMux.HandleFunc("/", ps.ServeWsHandle)
+	customMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		serveWs(ps, w, r)
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	ctx = context.WithValue(ctx, USER_ID_KEY, "9")

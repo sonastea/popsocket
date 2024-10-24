@@ -16,7 +16,7 @@ func TestClientID(t *testing.T) {
 func TestNewClient(t *testing.T) {
 	var (
 		discordID = "9"
-		userID    = 9
+		userID    = int32(9)
 	)
 
 	t.Run("UserID and DiscordID Present", func(t *testing.T) {
@@ -32,6 +32,10 @@ func TestNewClient(t *testing.T) {
 
 		if *client.DiscordID != discordID {
 			t.Errorf("Expected client's DiscordID = %s, got %s", discordID, *client.DiscordID)
+		}
+
+		if client.send != nil {
+			t.Error("Expected client's send channel to not be nil")
 		}
 	})
 

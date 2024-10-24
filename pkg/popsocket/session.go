@@ -11,7 +11,7 @@ import (
 
 type SessionStore interface {
 	Find(ctx context.Context, sid string) (Session, error)
-	UserFromDiscordID(ctx context.Context, discordID string) (int, error)
+	UserFromDiscordID(ctx context.Context, discordID string) (int32, error)
 }
 
 type sessionStore struct {
@@ -19,7 +19,7 @@ type sessionStore struct {
 }
 
 type User struct {
-	ID        int     `json:"id,omitempty"`
+	ID        int32   `json:"id,omitempty"`
 	DiscordID *string `json:"discordId,omitempty"`
 }
 
@@ -78,8 +78,8 @@ func (ss *sessionStore) Find(ctx context.Context, sid string) (Session, error) {
 // UserFromDiscordID finds the client's user id to fulfill the client's id field.
 // Every client has a local account with kpopppop regardless of the user's login method.
 // Therefore, we use client.ID() because their userID should always be present.
-func (ss *sessionStore) UserFromDiscordID(ctx context.Context, discordID string) (int, error) {
-	var userID int
+func (ss *sessionStore) UserFromDiscordID(ctx context.Context, discordID string) (int32, error) {
+	var userID int32
 	query := `SELECT id FROM "DiscordUser" WHERE "discordId" = $1`
 
 	err := ss.db.QueryRow(ctx, query, discordID).Scan(&userID)

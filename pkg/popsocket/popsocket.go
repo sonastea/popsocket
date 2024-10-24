@@ -56,7 +56,6 @@ type PopSocketInterface interface {
 	LogWarn(string, ...any)
 
 	manageConnections(ctx context.Context)
-	ServeWsHandle(w http.ResponseWriter, r *http.Request)
 	SetupRoutes(mux *http.ServeMux) error
 	Start(ctx context.Context) error
 }
@@ -67,6 +66,7 @@ type PopSocket struct {
 	mu         sync.RWMutex
 	Valkey     valkey.Client
 
+	broadcast  chan []byte
 	clients    map[client]bool
 	register   chan *Client
 	unregister chan *Client
@@ -98,7 +98,11 @@ func loadAllowedOrigins() {
 // New initializes a new PopSocket with optional configurations.
 func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 	ps := &PopSocket{
-		clients: make(map[client]bool),
+		broadcast:  make(chan []byte),
+		clients:    make(map[client]bool),
+		register:   make(chan *Client),
+		unregister: make(chan *Client),
+
 		httpServer: &http.Server{
 			Addr:         ":80",
 			ReadTimeout:  readTimeout,
@@ -106,10 +110,8 @@ func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 			IdleTimeout:  idleTimeout,
 			Handler:      http.NewServeMux(),
 		},
-		logger:     newLogger(),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		Valkey:     valkey,
+		logger: newLogger(),
+		Valkey: valkey,
 	}
 
 	// Apply any options passed to configure the PopSocket.
@@ -237,12 +239,16 @@ func (p *PopSocket) totalClients() int {
 	return len(p.clients)
 }
 
-// manageConnections listens for client register/unregister events, and handles lifecycle events.
+// manageConnections listens for client register/unregister events,
+// message processing, and handles lifecycle events.
 func (p *PopSocket) manageConnections(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
+		case _ = <-p.broadcast:
+
 		case client := <-p.register:
 			p.mu.Lock()
 			p.clients[client] = true
@@ -252,6 +258,7 @@ func (p *PopSocket) manageConnections(ctx context.Context) {
 		case client := <-p.unregister:
 			if _, ok := p.clients[client]; ok {
 				p.mu.Lock()
+				close(client.send)
 				delete(p.clients, client)
 				p.mu.Unlock()
 				p.LogInfo(fmt.Sprintf("Left size of connection pool: %v", p.totalClients()))
@@ -261,8 +268,8 @@ func (p *PopSocket) manageConnections(ctx context.Context) {
 	}
 }
 
-// ServeWsHandle handles incoming websocket connection requests.
-func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
+// serveWs handles incoming websocket connection requests.
+func serveWs(p *PopSocket, w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: AllowedOrigins,
 	})
@@ -272,7 +279,6 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
 	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
 
 	p.register <- client
@@ -283,7 +289,6 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 
 	<-ctx.Done()
 
-	conn.Close(websocket.StatusNormalClosure, "Client disconnected")
 	p.unregister <- client
 	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 
@@ -307,7 +312,9 @@ func (p *PopSocket) ServeWsHandle(w http.ResponseWriter, r *http.Request) {
 
 // SetupRoutes registers the http routes for the PopSocket server.
 func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
-	mux.HandleFunc("/", p.ValidateCookie(p.ServeWsHandle))
+	mux.HandleFunc("/", p.ValidateCookie(func(w http.ResponseWriter, r *http.Request) {
+		serveWs(p, w, r)
+	}))
 
 	return nil
 }
@@ -315,14 +322,19 @@ func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
 // heartbeat sends periodic ping messages to the client to ensure the connection is still active.
 func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.Duration) {
 	ticker := time.NewTimer(period)
-	defer ticker.Stop()
 	client.conn.SetReadLimit(maxMessageSize)
+
+	defer func() {
+		ticker.Stop()
+		client.conn.Close(websocket.StatusNormalClosure, "Heartbeat gone.")
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			client.conn.Close(websocket.StatusNormalClosure, "Heartbeat gone.")
+			p.unregister <- client
 			return
+
 		case <-ticker.C:
 			// TODO: Validate session has not expired, close connection if that's not the case.
 			err := client.conn.Ping(ctx)
@@ -332,7 +344,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 				return
 			}
 			ticker.Reset(period)
-			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %v", client.ID()))
+			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %v", client.UserID))
 		}
 	}
 }

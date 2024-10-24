@@ -2,7 +2,6 @@ package popsocket
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/coder/websocket"
@@ -10,32 +9,35 @@ import (
 
 type client interface {
 	Conn() *websocket.Conn
-	ID() int
+	ID() int32
 }
 
 type Client struct {
+	conn *websocket.Conn
+	send chan []byte
+
 	connID    string
-	UserID    int     `json:"userId,omitempty"`
+	UserID    int32   `json:"userId,omitempty"`
 	DiscordID *string `json:"discordId,omitempty"`
-	conn      *websocket.Conn
 }
 
 func (c *Client) Conn() *websocket.Conn {
 	return c.conn
 }
 
-func (c *Client) ID() int {
+func (c *Client) ID() int32 {
 	return c.UserID
 }
 
 // newClient returns an instance of Client with the corresponding user metadata.
 func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Client {
 	client := &Client{
-		connID: connKey,
+		send:   make(chan []byte),
 		conn:   conn,
+		connID: connKey,
 	}
 
-	if userID, ok := ctx.Value(USER_ID_KEY).(int); ok {
+	if userID, ok := ctx.Value(USER_ID_KEY).(int32); ok {
 		client.UserID = userID
 	}
 
@@ -49,7 +51,10 @@ func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Clien
 // messageReceiver listens for incoming messages from the client
 // and processes them based on the message type.
 func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel context.CancelFunc) {
-	defer cancel()
+	defer func() {
+		cancel()
+		client.Conn().Close(websocket.StatusNormalClosure, "Client disconnected")
+	}()
 
 	for {
 		select {
@@ -58,7 +63,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 			return
 
 		default:
-			_, msg, err := client.Conn().Read(ctx)
+			_, message, err := client.Conn().Read(ctx)
 			if err != nil {
 				// Handle contextion cancellation explicitly
 				if ctx.Err() != nil {
@@ -82,78 +87,12 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 				return
 			}
 
-			var rawMap map[string]json.RawMessage
-			err = json.Unmarshal(msg, &rawMap)
-			if err != nil {
-				p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %v, got %s", client, string(msg)))
-				continue
-			}
-
-			if _, ok := rawMap["event"]; ok {
-				var recv EventMessage
-				err = json.Unmarshal(rawMap["event"], &recv.Event)
-				if err != nil {
-					p.LogWarn(fmt.Sprintf("Unable to unmarshal message by client %v, got %+v. Error: %v", client.ID(), rawMap, err))
-				}
-
-				switch recv.Event.Type() {
-				case EventMessageType.Connect.Type():
-					json.Unmarshal(msg, &recv.Content)
-					msg, err := json.Marshal(&EventMessage{Event: EventMessageType.Connect, Content: "pong!"})
-					if err != nil {
-						p.LogError("Error marshalling connect message: %w", err)
-					}
-					err = client.Conn().Write(ctx, websocket.MessageText, msg)
-
-				case EventMessageType.Conversations.Type():
-					json.Unmarshal(msg, &recv.Content)
-					conversations, err := p.messageStore.Convos(ctx, client.ID())
-					if err != nil {
-						p.LogError("Error getting client's conversations: %w", err)
-					}
-					convos, err := json.Marshal(conversations.Conversations)
-					if err != nil {
-						p.LogError("Error marshalling conversations: %w", err)
-					}
-
-					msg, _ := json.Marshal(EventMessage{
-						Event:   EventMessageType.Conversations,
-						Content: fmt.Sprintf(`["%s", %s]`, EventMessageType.Conversations, string(convos)),
-					})
-
-					err = client.Conn().Write(ctx, websocket.MessageText, msg)
-
-				case EventMessageType.MarkAsRead.Type():
-					var content ContentMarkAsRead
-					json.Unmarshal(rawMap["content"], &content)
-
-					m, err := p.messageStore.UpdateAsRead(ctx, content)
-					if err != nil {
-						p.LogWarn(err.Error(), m)
-					}
-
-					contentJSON, _ := json.Marshal(m)
-					msg, err := json.Marshal(EventMessage{Event: EventMessageType.MarkAsRead, Content: string(contentJSON)})
-					if err != nil {
-						p.LogError("Error marshalling connect message: %w", err)
-					}
-
-					err = client.Conn().Write(ctx, websocket.MessageText, msg)
-
-				case EventMessageType.SetRecipient.Type():
-
-				default:
-					p.LogWarn(fmt.Sprintf("received: %+v", recv))
-				}
-
-			} else if _, ok := rawMap["convId"]; ok {
-				p.LogWarn(fmt.Sprintf("message received: %+v", msg))
-			}
+			go p.processMessages(ctx, client, message)
 		}
 	}
 }
 
-// messageSender dispatches messages from the PopSocket to the associated client.
+// messageSender dispatches messages from the PopSocket server to the associated client.
 func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 	for {
 		select {
