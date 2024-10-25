@@ -3,7 +3,6 @@ package popsocket
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/coder/websocket"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
@@ -27,10 +26,6 @@ func (p *PopSocket) processMessages(ctx context.Context, client client, recv []b
 		p.LogError(err.Error())
 	}
 
-	var logMsg strings.Builder
-	logMsg.WriteString("[UNHANDLED recv] ")
-	logMsg.WriteString(message.String())
-
 	switch message.Event {
 	case ipc.EventType_CONNECT:
 		p.connect(ctx, client)
@@ -38,8 +33,9 @@ func (p *PopSocket) processMessages(ctx context.Context, client client, recv []b
 		p.conversations(ctx, client)
 	case ipc.EventType_MARK_AS_READ:
 		p.read(ctx, client, message.GetReqRead())
+		p.LogWarn("[UNHANDLED recv] " + message.String())
 	default:
-		p.LogWarn(logMsg.String())
+		p.LogWarn("[UNHANDLED recv] " + message.String())
 	}
 }
 
