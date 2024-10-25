@@ -34,7 +34,7 @@ func TestNewClient(t *testing.T) {
 			t.Errorf("Expected client's DiscordID = %s, got %s", discordID, *client.DiscordID)
 		}
 
-		if client.send != nil {
+		if client.send == nil {
 			t.Error("Expected client's send channel to not be nil")
 		}
 	})

@@ -15,9 +15,11 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
+	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	mock_db "github.com/sonastea/popsocket/internal/mock"
 	"github.com/sonastea/popsocket/pkg/testutil"
 	"github.com/valkey-io/valkey-go"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestLoadAllowedOrigins loads the env variable `ALLOWED_ORIGINS` and
@@ -250,8 +252,8 @@ func TestServeWs(t *testing.T) {
 		t.Errorf("Expected 1 client, got %d", clients)
 	}
 
-	psMessage := EventMessage{Event: EventMessageType.Connect, Content: "ping!"}
-	m, err := json.Marshal(psMessage)
+	psMessage := ipc.EventMessage{Event: ipc.EventType_CONNECT}
+	m, err := proto.Marshal(&psMessage)
 	err = conn.Write(ctx, websocket.MessageText, m)
 	if err != nil {
 		t.Fatalf("Failed to send message to server: %v", err)
@@ -262,13 +264,13 @@ func TestServeWs(t *testing.T) {
 		t.Fatalf("Failed to read message from server: %v", err)
 	}
 
-	var message EventMessage
-	err = json.Unmarshal(msg, &message)
+	var message ipc.EventMessage
+	err = proto.Unmarshal(msg, &message)
 	if err != nil {
 		t.Fatalf("Failed to unmarshal message: %v, got %s", err, string(msg))
 	}
 
-	if message.Event != EventMessageType.Connect {
+	if message.GetEvent() != ipc.EventType_CONNECT {
 		t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
 	}
 
@@ -340,8 +342,6 @@ func TestWithOpts(t *testing.T) {
 		messageStore := NewMessageStore(mock_db.New())
 		messageService := NewMessageService(messageStore)
 
-		// TODO: CONVERTS MessageStore to MessageService like sessionmiddleware as business layer
-		// while MessageStore handles database layer.
 		ps, err := New(vk, WithMessageService(messageService))
 		if err != nil {
 			t.Fatalf("New() with WithMessageService failed: %v", err)

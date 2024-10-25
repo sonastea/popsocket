@@ -23,7 +23,8 @@ func parseEventMessage(recv []byte) (*ipc.EventMessage, error) {
 func (p *PopSocket) processMessages(ctx context.Context, client client, recv []byte) {
 	message, err := parseEventMessage(recv)
 	if err != nil {
-		p.LogError(err.Error())
+		p.LogError("[UNHANDLED recv] " + message.String() + err.Error())
+		return
 	}
 
 	switch message.Event {
@@ -33,7 +34,6 @@ func (p *PopSocket) processMessages(ctx context.Context, client client, recv []b
 		p.conversations(ctx, client)
 	case ipc.EventType_MARK_AS_READ:
 		p.read(ctx, client, message.GetReqRead())
-		p.LogWarn("[UNHANDLED recv] " + message.String())
 	default:
 		p.LogWarn("[UNHANDLED recv] " + message.String())
 	}
