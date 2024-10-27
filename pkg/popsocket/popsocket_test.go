@@ -271,7 +271,7 @@ func TestServeWs(t *testing.T) {
 	}
 
 	if message.GetEvent() != ipc.EventType_CONNECT {
-		t.Errorf("Expected event '%s', got '%s'", EventMessageType.Connect, message.Event)
+		t.Errorf("Expected event '%s', got '%s'", ipc.EventType_CONNECT, message.Event)
 	}
 
 	conn.Close(websocket.StatusNormalClosure, "Disconnecting from websocket, should be 0 clients connected.")

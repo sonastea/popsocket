@@ -22,82 +22,6 @@ type messageStore struct {
 	db db.DB
 }
 
-// MessageInterface defines a contract for all message types.
-type MessageInterface interface {
-	Type() string
-}
-
-type messageEventType string
-
-var EventMessageType = struct {
-	Connect       messageEventType
-	Conversations messageEventType
-	MarkAsRead    messageEventType
-	SetRecipient  messageEventType
-}{
-	Connect:       messageEventType("CONNECT"),
-	Conversations: messageEventType("CONVERSATIONS"),
-	MarkAsRead:    messageEventType("MARK_AS_READ"),
-	SetRecipient:  messageEventType("SET_RECIPIENT"),
-}
-
-// EventMessage represents a message used for event-driven communication.
-type EventMessage struct {
-	Event   messageEventType `json:"event"`
-	Content string           `json:"content"`
-}
-
-// ContentMarkAsRead is the struct representing content from a EventMessageType.MarkAsRead
-type ContentMarkAsRead struct {
-	Convid  string `json:"convid"`
-	To      int    `json:"to"`
-	Content string `json:"content"`
-	Read    bool   `json:"read"`
-}
-
-// ContentMarkAsReadResponse is the struct representing content from a EventMessageType.MarkAsRead
-type ContentMarkAsReadResponse struct {
-	Convid string `json:"convid"`
-	To     int    `json:"to"`
-	Unread int    `json:"unread"`
-	Read   bool   `json:"read"`
-}
-
-// Type returns the underlying type as a string.
-func (m messageEventType) Type() string {
-	return string(m)
-}
-
-// Type returns the type of the message to distinguish its role.
-func (em *EventMessage) Type() string {
-	return string(em.Event)
-}
-
-type ConversationsResponse struct {
-	Conversations []Conversation `json:"conversations"`
-}
-
-type Message struct {
-	Convid    string    `json:"convid"`
-	To        int       `json:"to"`
-	From      int       `json:"from"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt"`
-	FromSelf  bool      `json:"fromSelf"`
-	Read      bool      `json:"read"`
-}
-
-type Conversation struct {
-	ID          int       `json:"id"`     // serial integer
-	Convid      string    `json:"convid"` // unique identifier (uuid)
-	Username    string    `json:"username"`
-	Displayname string    `json:"displayname"`
-	Photo       *string   `json:"photo"`
-	Status      string    `json:"status"`
-	Messages    []Message `json:"messages"`
-	Unread      int       `json:"unread"`
-}
-
 // NewMessageService creates a new instance of MessageService.
 func NewMessageService(store MessageStore) MessageService {
 	return MessageService{
@@ -108,10 +32,6 @@ func NewMessageService(store MessageStore) MessageService {
 // NewMessageStore creates a new instance of sessionStore.
 func NewMessageStore(db db.DB) *messageStore {
 	return &messageStore{db: db}
-}
-
-func (m *Message) Type() string {
-	return "Message"
 }
 
 func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error) {
