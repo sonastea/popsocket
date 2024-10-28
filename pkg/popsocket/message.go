@@ -55,11 +55,11 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
           LEFT JOIN "Message" m ON c.convid = m."convId"
         )
         SELECT
-          cm."recipientId" as id, cu.convid, cu.username, cu.displayname, cu.photo, cu.status,
+          cu.user_id as id, cu.convid, cu.username, cu.displayname, cu.photo, cu.status,
           cm."recipientId", cm."userId", cm.content, cm."createdAt", cm."fromSelf", cm.read
         FROM conversation_users cu
         LEFT JOIN conversation_messages cm ON cu.convid = cm.convid
-        ORDER BY cu.id, cm."createdAt" desc
+        ORDER BY cu.id, cm."createdAt" asc
         `
 
 	rows, err := ms.db.Query(ctx, query, user_id)

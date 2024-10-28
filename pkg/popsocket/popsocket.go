@@ -67,7 +67,7 @@ type PopSocket struct {
 	Valkey     valkey.Client
 
 	broadcast  chan []byte
-	clients    map[client]bool
+	clients    map[int32]map[string]client
 	register   chan *Client
 	unregister chan *Client
 
@@ -99,7 +99,7 @@ func loadAllowedOrigins() {
 func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 	ps := &PopSocket{
 		broadcast:  make(chan []byte),
-		clients:    make(map[client]bool),
+		clients:    make(map[int32]map[string]client),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 
@@ -232,7 +232,7 @@ func (p *PopSocket) LogWarn(msg string, args ...any) {
 	p.logger.Warn(msg, args...)
 }
 
-// totalClients returns the total number of connected clients.
+// totalClients returns the total number of connected clients including own multiple web connections.
 func (p *PopSocket) totalClients() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -249,17 +249,25 @@ func (p *PopSocket) manageConnections(ctx context.Context) {
 
 		case _ = <-p.broadcast:
 
-		case client := <-p.register:
+		case c := <-p.register:
 			p.mu.Lock()
-			p.clients[client] = true
+			if p.clients[c.ID()] == nil {
+				p.clients[c.ID()] = make(map[string]client)
+			}
+			p.clients[c.ID()][c.ConnID()] = c
 			p.mu.Unlock()
 			p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
 
-		case client := <-p.unregister:
-			if _, ok := p.clients[client]; ok {
+		case c := <-p.unregister:
+			if _, ok := p.clients[c.ID()][c.ConnID()]; ok {
 				p.mu.Lock()
-				close(client.send)
-				delete(p.clients, client)
+				close(c.send)
+				if conns, ok := p.clients[c.ID()]; ok {
+					delete(conns, c.ConnID())
+					if len(conns) == 0 {
+						delete(p.clients, c.ID())
+					}
+				}
 				p.mu.Unlock()
 				p.LogInfo(fmt.Sprintf("Left size of connection pool: %v", p.totalClients()))
 			}

@@ -1,6 +1,7 @@
 package popsocket
 
 import (
+	"bytes"
 	"log/slog"
 	"sync"
 
@@ -12,7 +13,7 @@ var (
 	logger *slog.Logger
 )
 
-// newLogger returns a singleton slog.Logger
+// newLogger returns a singleton slog.Logger.
 func newLogger() *slog.Logger {
 	once.Do(func() {
 		prettyHandler := prettylog.NewHandler(&slog.HandlerOptions{
@@ -27,6 +28,14 @@ func newLogger() *slog.Logger {
 	return logger
 }
 
+// Logger is a wrapper around newLogger that allows global access to the singleton instance.
 func Logger() *slog.Logger {
 	return newLogger()
+}
+
+func newTestLogger() (*slog.Logger, *bytes.Buffer) {
+	buf := &bytes.Buffer{}
+	handler := slog.NewTextHandler(buf, nil)
+	logger := slog.New(handler)
+	return logger, buf
 }

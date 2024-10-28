@@ -6,7 +6,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.33.0
 	github.com/coder/websocket v1.8.12
 	github.com/jackc/pgx/v5 v5.7.1
-	github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.7
+	github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.9
 	github.com/valkey-io/valkey-go v1.0.47
 	google.golang.org/protobuf v1.35.1
 )

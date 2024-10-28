@@ -9,6 +9,7 @@ import (
 
 type client interface {
 	Conn() *websocket.Conn
+	ConnID() string
 	ID() int32
 }
 
@@ -23,6 +24,10 @@ type Client struct {
 
 func (c *Client) Conn() *websocket.Conn {
 	return c.conn
+}
+
+func (c *Client) ConnID() string {
+	return c.connID
 }
 
 func (c *Client) ID() int32 {
