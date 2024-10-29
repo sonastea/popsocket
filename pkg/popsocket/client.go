@@ -92,7 +92,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 				return
 			}
 
-			go p.processMessages(ctx, client, message)
+			go p.handleMessages(ctx, client, message)
 		}
 	}
 }

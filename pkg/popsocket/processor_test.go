@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestParseEventMessage(t *testing.T) {
+func TestParseMessage(t *testing.T) {
 	t.Run("Parse EventMessage", func(t *testing.T) {
 		message := &ipc.EventMessage{
 			Event: ipc.EventType_MARK_AS_READ,
@@ -23,7 +23,7 @@ func TestParseEventMessage(t *testing.T) {
 		}
 
 		send, _ := proto.Marshal(message)
-		m, err := parseEventMessage(send)
+		m, err := parseMessage(send)
 		if err != nil {
 			t.Fatalf("Failed to parse event message: %s", err.Error())
 		}
@@ -52,7 +52,7 @@ func TestParseEventMessage(t *testing.T) {
 		}
 
 		send, _ := proto.Marshal(message)
-		m, err := parseEventMessage(send)
+		m, err := parseMessage(send)
 		if err != nil {
 			t.Fatalf("Failed to parse event message: %s", err.Error())
 		}
@@ -71,7 +71,7 @@ func TestParseEventMessage(t *testing.T) {
 	t.Run("Expect failing to parse from invalid message", func(t *testing.T) {
 		invalidMsg := []byte("invalid protobuf message")
 
-		m, err := parseEventMessage(invalidMsg)
+		m, err := parseMessage(invalidMsg)
 		if err.Error() != ParseEventMessageError {
 			t.Fatalf("Expected error message '%s', got %s", ParseEventMessageError, err.Error())
 		}
@@ -81,7 +81,7 @@ func TestParseEventMessage(t *testing.T) {
 	})
 }
 
-func TestProcessMessage(t *testing.T) {
+func TestHandleMessages(t *testing.T) {
 	t.Run(("Expect PARSE ERROR early return"), func(t *testing.T) {
 		logger, buf := newTestLogger()
 		p := &PopSocket{
@@ -89,7 +89,7 @@ func TestProcessMessage(t *testing.T) {
 		}
 
 		invalidMsg := []byte("invalid protobuf message")
-		p.processMessages(context.Background(), &Client{}, invalidMsg)
+		p.handleMessages(context.Background(), &Client{}, invalidMsg)
 		if !strings.Contains(buf.String(), "[PARSE ERROR]") {
 			t.Fatalf("Expected '[PARSE ERROR]' in logged message, got %s", buf.String())
 		}

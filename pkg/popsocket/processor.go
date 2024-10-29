@@ -25,7 +25,7 @@ type ParsedMessage struct {
 	Message      *ipc.Message
 }
 
-func parseEventMessage(recv []byte) (*ParsedMessage, error) {
+func parseMessage(recv []byte) (*ParsedMessage, error) {
 	eventMsg := &ipc.EventMessage{}
 	if err := proto.Unmarshal(recv, eventMsg); err == nil {
 		if eventMsg.Event != ipc.EventType_UNKNOWN_TYPE {
@@ -50,8 +50,8 @@ func parseEventMessage(recv []byte) (*ParsedMessage, error) {
 	return nil, fmt.Errorf(ParseEventMessageError)
 }
 
-func (p *PopSocket) processMessages(ctx context.Context, client client, recv []byte) {
-	parsed, err := parseEventMessage(recv)
+func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []byte) {
+	parsed, err := parseMessage(recv)
 	if err != nil {
 		p.LogError("[PARSE ERROR] " + err.Error() + " " + string(recv))
 		return
