@@ -29,7 +29,7 @@ const (
 	heartbeatPeriod = (readWait * 9) / 10
 
 	// Maximum message size allowed from client.
-	maxMessageSize = int64(512)
+	MaxMessageSize = int64(1024)
 
 	// writeTimeout sets the maximum duration before timing out writes of the response.
 	writeTimeout = 15 * time.Second
@@ -98,7 +98,7 @@ func loadAllowedOrigins() {
 // New initializes a new PopSocket with optional configurations.
 func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
 	ps := &PopSocket{
-		broadcast:  make(chan []byte),
+		broadcast:  make(chan []byte, MaxMessageSize),
 		clients:    make(map[int32]map[string]client),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
@@ -287,7 +287,9 @@ func serveWs(p *PopSocket, w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
+	client.Conn().SetReadLimit(MaxMessageSize)
 
 	p.register <- client
 
@@ -296,9 +298,9 @@ func serveWs(p *PopSocket, w http.ResponseWriter, r *http.Request) {
 	go p.heartbeat(ctx, client, heartbeatPeriod)
 
 	<-ctx.Done()
+	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 
 	p.unregister <- client
-	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 
 	/* clientId := "1"
 			hashKey := fmt.Sprintf("convosession:%s", clientId)
@@ -330,7 +332,6 @@ func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
 // heartbeat sends periodic ping messages to the client to ensure the connection is still active.
 func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.Duration) {
 	ticker := time.NewTimer(period)
-	client.conn.SetReadLimit(maxMessageSize)
 
 	defer func() {
 		ticker.Stop()
@@ -340,9 +341,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 	for {
 		select {
 		case <-ctx.Done():
-			p.unregister <- client
 			return
-
 		case <-ticker.C:
 			// TODO: Validate session has not expired, close connection if that's not the case.
 			err := client.conn.Ping(ctx)
@@ -352,7 +351,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 				return
 			}
 			ticker.Reset(period)
-			p.LogInfo(fmt.Sprintf("Sent heartbeat to client %v", client.UserID))
+			p.LogInfo(fmt.Sprintf("Sent heartbeat to userID %d, connID %s", client.ID(), client.ConnID()))
 		}
 	}
 }

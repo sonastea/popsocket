@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coder/websocket"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"google.golang.org/protobuf/proto"
 )
@@ -38,7 +37,6 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 
 	regularMsg := &ipc.Message{}
 	if err := proto.Unmarshal(recv, regularMsg); err == nil {
-		fmt.Println(len(recv))
 		// TODO: Generate CONVID(UUID) and CreatedAt in database layer?
 		regularMsg.CreatedAt = time.Now().Format(time.RFC3339)
 		return &ParsedMessage{
@@ -59,9 +57,9 @@ func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []by
 
 	switch parsed.Type {
 	case EventMessageType:
-		p.processEventMessage(ctx, client, parsed.EventMessage)
+		go p.processEventMessage(ctx, client, parsed.EventMessage)
 	case RegularMessageType:
-		p.processRegularMessage(ctx, parsed.Message)
+		go p.processRegularMessage(recv, parsed)
 	}
 }
 
@@ -78,21 +76,18 @@ func (p *PopSocket) processEventMessage(ctx context.Context, client client, m *i
 	}
 }
 
-func (p *PopSocket) processRegularMessage(ctx context.Context, m *ipc.Message) {
-	encoded, err := proto.Marshal(m)
-	if err != nil {
-		p.LogError("Marshal error: %w", err)
-	}
+func (p *PopSocket) processRegularMessage(send []byte, m *ParsedMessage) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
-	for _, recipient := range p.clients[m.To] {
-		if err := recipient.Conn().Write(ctx, websocket.MessageBinary, encoded); err != nil {
-			p.LogError("Websocket write error: %w", err)
+	if recipients, ok := p.clients[m.Message.To]; ok {
+		for _, client := range recipients {
+			client.Send() <- send
 		}
 	}
-
-	for _, recipient := range p.clients[m.From] {
-		if err := recipient.Conn().Write(ctx, websocket.MessageBinary, encoded); err != nil {
-			p.LogError("Websocket write error: %w", err)
+	if sender, ok := p.clients[m.Message.From]; ok {
+		for _, client := range sender {
+			client.Send() <- send
 		}
 	}
 }
@@ -105,7 +100,7 @@ func (p *PopSocket) connect(ctx context.Context, client client) {
 		}},
 	}
 
-	if err := p.writeMessage(ctx, client, message); err != nil {
+	if err := p.writeEventMessage(ctx, client, message); err != nil {
 		p.LogError("connect", "WriteError", err.Error())
 	}
 }
@@ -125,7 +120,7 @@ func (p *PopSocket) conversations(ctx context.Context, client client) {
 		},
 	}
 
-	if err := p.writeMessage(ctx, client, message); err != nil {
+	if err := p.writeEventMessage(ctx, client, message); err != nil {
 		p.LogError("conversations", "WriteError", err.Error())
 	}
 }
@@ -143,20 +138,18 @@ func (p *PopSocket) read(ctx context.Context, client client, m *ipc.ContentMarkA
 		},
 	}
 
-	if err := p.writeMessage(ctx, client, message); err != nil {
+	if err := p.writeEventMessage(ctx, client, message); err != nil {
 		p.LogError("read", "WriteError", err.Error())
 	}
 }
 
-func (p *PopSocket) writeMessage(ctx context.Context, client client, msg interface{}) error {
+func (p *PopSocket) writeEventMessage(ctx context.Context, client client, msg interface{}) error {
 	encoded, err := proto.Marshal(msg.(proto.Message))
 	if err != nil {
 		return fmt.Errorf("Marshal error: %w", err)
 	}
 
-	if err := client.Conn().Write(ctx, websocket.MessageBinary, encoded); err != nil {
-		return fmt.Errorf("Websocket write error: %w", err)
-	}
+	client.Send() <- encoded
 
 	return nil
 }

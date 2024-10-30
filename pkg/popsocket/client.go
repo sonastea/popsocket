@@ -11,6 +11,7 @@ type client interface {
 	Conn() *websocket.Conn
 	ConnID() string
 	ID() int32
+	Send() chan []byte
 }
 
 type Client struct {
@@ -34,10 +35,14 @@ func (c *Client) ID() int32 {
 	return c.UserID
 }
 
+func (c *Client) Send() chan []byte {
+	return c.send
+}
+
 // newClient returns an instance of Client with the corresponding user metadata.
 func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Client {
 	client := &Client{
-		send:   make(chan []byte),
+		send:   make(chan []byte, MaxMessageSize),
 		conn:   conn,
 		connID: connKey,
 	}
@@ -62,38 +67,31 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 	}()
 
 	for {
-		select {
-		case <-ctx.Done():
-			p.LogInfo("Context done, message receiver stopping")
-			return
-
-		default:
-			_, message, err := client.Conn().Read(ctx)
-			if err != nil {
-				// Handle contextion cancellation explicitly
-				if ctx.Err() != nil {
-					p.LogInfo("Context was canceled, exiting messageReceiver.")
-					client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
-					return
-				}
-
-				closeStatus := websocket.CloseStatus(err)
-				if closeStatus != -1 {
-					if closeStatus == websocket.StatusGoingAway || closeStatus == websocket.StatusNoStatusRcvd {
-						return
-					}
-
-					p.LogWarn(fmt.Sprintf("WebSocket closed for client %v, err: %+v", client.ID(), err))
-					client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
-					return
-				}
-
-				p.LogWarn(fmt.Sprintf("Error reading from client %v: %v", client.ID(), err))
+		_, message, err := client.Conn().Read(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				p.LogInfo("Context was canceled, exiting messageReceiver.")
+				client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
 				return
 			}
 
-			go p.handleMessages(ctx, client, message)
+			closeStatus := websocket.CloseStatus(err)
+			switch {
+			case closeStatus == websocket.StatusNormalClosure || closeStatus == websocket.StatusGoingAway:
+				return
+
+			case closeStatus != -1:
+				p.LogWarn(fmt.Sprintf("WebSocket closed for client %v, err: %+v", client.ID(), err))
+				client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
+				return
+
+			default:
+				p.LogWarn(fmt.Sprintf("Error reading from client %v: %v", client.ID(), err))
+				return
+			}
 		}
+
+		go p.handleMessages(ctx, client, message)
 	}
 }
 
@@ -103,6 +101,16 @@ func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 		select {
 		case <-ctx.Done():
 			return
+		case message, ok := <-client.Send():
+			if !ok {
+				return
+			}
+			writeCtx, cancel := context.WithTimeout(ctx, writeTimeout-10)
+			defer cancel()
+			if err := client.Conn().Write(writeCtx, websocket.MessageBinary, message); err != nil {
+				p.LogError("messageSender write error: %w", err)
+				return
+			}
 		}
 	}
 }

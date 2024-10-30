@@ -254,7 +254,7 @@ func TestServeWs(t *testing.T) {
 
 	psMessage := ipc.EventMessage{Event: ipc.EventType_CONNECT}
 	m, err := proto.Marshal(&psMessage)
-	err = conn.Write(ctx, websocket.MessageText, m)
+	err = conn.Write(ctx, websocket.MessageBinary, m)
 	if err != nil {
 		t.Fatalf("Failed to send message to server: %v", err)
 	}
