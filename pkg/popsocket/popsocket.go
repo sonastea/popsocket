@@ -286,21 +286,15 @@ func serveWs(p *PopSocket, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	client := newClient(ctx, r.Header.Get("Sec-Websocket-Key"), conn)
+	client := newClient(r.Context(), r.Header.Get("Sec-Websocket-Key"), conn)
 	client.Conn().SetReadLimit(MaxMessageSize)
 
 	p.register <- client
+	ctx, cancel := context.WithCancel(context.Background())
 
 	go p.messageReceiver(ctx, client, cancel)
 	go p.messageSender(ctx, client)
 	go p.heartbeat(ctx, client, heartbeatPeriod)
-
-	<-ctx.Done()
-	p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
-
-	p.unregister <- client
 
 	/* clientId := "1"
 			hashKey := fmt.Sprintf("convosession:%s", clientId)

@@ -24,6 +24,21 @@ type ParsedMessage struct {
 	Message      *ipc.Message
 }
 
+func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []byte) {
+	parsed, err := parseMessage(recv)
+	if err != nil {
+		p.LogError("[PARSE ERROR] " + err.Error() + " " + string(recv))
+		return
+	}
+
+	switch parsed.Type {
+	case EventMessageType:
+		p.processEventMessage(ctx, client, parsed.EventMessage)
+	case RegularMessageType:
+		go p.processRegularMessage(recv, parsed)
+	}
+}
+
 func parseMessage(recv []byte) (*ParsedMessage, error) {
 	eventMsg := &ipc.EventMessage{}
 	if err := proto.Unmarshal(recv, eventMsg); err == nil {
@@ -48,25 +63,10 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 	return nil, fmt.Errorf(ParseEventMessageError)
 }
 
-func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []byte) {
-	parsed, err := parseMessage(recv)
-	if err != nil {
-		p.LogError("[PARSE ERROR] " + err.Error() + " " + string(recv))
-		return
-	}
-
-	switch parsed.Type {
-	case EventMessageType:
-		go p.processEventMessage(ctx, client, parsed.EventMessage)
-	case RegularMessageType:
-		go p.processRegularMessage(recv, parsed)
-	}
-}
-
 func (p *PopSocket) processEventMessage(ctx context.Context, client client, m *ipc.EventMessage) {
 	switch m.Event {
 	case ipc.EventType_CONNECT:
-		p.connect(ctx, client)
+		p.connect(client)
 	case ipc.EventType_CONVERSATIONS:
 		p.conversations(ctx, client)
 	case ipc.EventType_MARK_AS_READ:
@@ -92,7 +92,18 @@ func (p *PopSocket) processRegularMessage(send []byte, m *ParsedMessage) {
 	}
 }
 
-func (p *PopSocket) connect(ctx context.Context, client client) {
+func (p *PopSocket) writeEventMessage(client client, msg *ipc.EventMessage) error {
+	if msg == nil {
+		return fmt.Errorf("Marshal error: msg passed is nil")
+	}
+
+	encoded, _ := proto.Marshal(msg)
+	client.Send() <- encoded
+
+	return nil
+}
+
+func (p *PopSocket) connect(client client) {
 	message := &ipc.EventMessage{
 		Event: ipc.EventType_CONNECT,
 		Content: &ipc.EventMessage_RespConnect{RespConnect: &ipc.ContentConnectResponse{
@@ -100,7 +111,7 @@ func (p *PopSocket) connect(ctx context.Context, client client) {
 		}},
 	}
 
-	if err := p.writeEventMessage(ctx, client, message); err != nil {
+	if err := p.writeEventMessage(client, message); err != nil {
 		p.LogError("connect", "WriteError", err.Error())
 	}
 }
@@ -120,7 +131,7 @@ func (p *PopSocket) conversations(ctx context.Context, client client) {
 		},
 	}
 
-	if err := p.writeEventMessage(ctx, client, message); err != nil {
+	if err := p.writeEventMessage(client, message); err != nil {
 		p.LogError("conversations", "WriteError", err.Error())
 	}
 }
@@ -138,18 +149,7 @@ func (p *PopSocket) read(ctx context.Context, client client, m *ipc.ContentMarkA
 		},
 	}
 
-	if err := p.writeEventMessage(ctx, client, message); err != nil {
+	if err := p.writeEventMessage(client, message); err != nil {
 		p.LogError("read", "WriteError", err.Error())
 	}
-}
-
-func (p *PopSocket) writeEventMessage(ctx context.Context, client client, msg interface{}) error {
-	encoded, err := proto.Marshal(msg.(proto.Message))
-	if err != nil {
-		return fmt.Errorf("Marshal error: %w", err)
-	}
-
-	client.Send() <- encoded
-
-	return nil
 }

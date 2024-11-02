@@ -1,12 +1,15 @@
 package popsocket
 
 import (
+	"bytes"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
+	mock_client "github.com/sonastea/popsocket/internal/mock/client"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -25,7 +28,7 @@ func TestParseMessage(t *testing.T) {
 		send, _ := proto.Marshal(message)
 		m, err := parseMessage(send)
 		if err != nil {
-			t.Fatalf("Failed to parse event message: %s", err.Error())
+			t.Fatalf("Failed to parse event message: %s", err)
 		}
 
 		if m.EventMessage.GetEvent() != ipc.EventType_MARK_AS_READ {
@@ -54,7 +57,7 @@ func TestParseMessage(t *testing.T) {
 		send, _ := proto.Marshal(message)
 		m, err := parseMessage(send)
 		if err != nil {
-			t.Fatalf("Failed to parse event message: %s", err.Error())
+			t.Fatalf("Failed to parse event message: %s", err)
 		}
 
 		if m.Message.GetTo() != 9 {
@@ -94,4 +97,60 @@ func TestHandleMessages(t *testing.T) {
 			t.Fatalf("Expected '[PARSE ERROR]' in logged message, got %s", buf.String())
 		}
 	})
+}
+
+func TestWriteEventMessage(t *testing.T) {
+	p := &PopSocket{}
+	c := mock_client.New("1", 1, "1")
+
+	err := p.writeEventMessage(c, nil)
+	if !strings.Contains(err.Error(), "msg passed is nil") {
+		t.Fatalf("Expected marshal error upon passing nil msg, got %s", err.Error())
+	}
+}
+
+func TestProcessRegularMessage(t *testing.T) {
+	logger, _ := newTestLogger()
+	sender := mock_client.New("sender", 1, "1")
+	receiver := mock_client.New("receiver", 9, "9")
+	p := &PopSocket{
+		logger: logger,
+		clients: map[int32]map[string]client{
+			1: {
+				"sender": sender,
+			},
+			9: {
+				"receiver": receiver,
+			},
+		},
+		mu: sync.RWMutex{},
+	}
+
+	content := "foo-bar"
+	m := &ipc.Message{
+		Content: &content,
+		To:      1,
+		From:    9,
+	}
+
+	send, err := proto.Marshal(m)
+	if err != nil {
+		t.Fatalf("Failed to marshal ipc message")
+	}
+
+	p.processRegularMessage(send, &ParsedMessage{Type: 1, Message: m})
+
+	select {
+	case msg := <-receiver.Send():
+		if !bytes.Equal(msg, send) {
+			t.Fatal("[Receiver] Expected receiver client to get message")
+		}
+	}
+
+	select {
+	case msg := <-sender.Send():
+		if !bytes.Equal(msg, send) {
+			t.Fatal("[Sender] Expected sender client to get message")
+		}
+	}
 }

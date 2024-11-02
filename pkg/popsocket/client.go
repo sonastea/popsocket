@@ -63,6 +63,8 @@ func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Clien
 func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel context.CancelFunc) {
 	defer func() {
 		cancel()
+		p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
+		p.unregister <- client
 		client.Conn().Close(websocket.StatusNormalClosure, "Client disconnected")
 	}()
 
@@ -91,7 +93,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 			}
 		}
 
-		go p.handleMessages(ctx, client, message)
+		p.handleMessages(ctx, client, message)
 	}
 }
 
