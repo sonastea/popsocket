@@ -16,7 +16,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/coder/websocket"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
-	mock_db "github.com/sonastea/popsocket/internal/mock"
+	mock_db "github.com/sonastea/popsocket/internal/mock/db"
 	"github.com/sonastea/popsocket/pkg/testutil"
 	"github.com/valkey-io/valkey-go"
 	"google.golang.org/protobuf/proto"
