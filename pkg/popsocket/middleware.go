@@ -14,6 +14,7 @@ type contextKey string
 const (
 	DISCORD_ID_KEY contextKey = "discordID"
 	USER_ID_KEY    contextKey = "userID"
+	SID_KEY        contextKey = "SID"
 )
 
 type SessionMiddleware struct {
@@ -50,13 +51,14 @@ func (sm *SessionMiddleware) ValidateCookie(next http.HandlerFunc) http.HandlerF
 			return
 		}
 
-		ctx = sm.bindToContext(ctx, session)
+		ctx = sm.bindToContext(ctx, session, sid)
 		next(w, r.WithContext(ctx))
 	}
 }
 
-// bindToContext adds the client's session data to the request context.
-func (sm *SessionMiddleware) bindToContext(ctx context.Context, session Session) context.Context {
+// bindToContext adds the client's session data and sid
+// (session id in database) to the request context.
+func (sm *SessionMiddleware) bindToContext(ctx context.Context, session Session, sid string) context.Context {
 	if session.Data.Passport.User.ID != 0 {
 		ctx = context.WithValue(ctx, USER_ID_KEY, session.Data.Passport.User.ID)
 	} else if session.Data.Passport.User.DiscordID != nil {
@@ -67,6 +69,8 @@ func (sm *SessionMiddleware) bindToContext(ctx context.Context, session Session)
 			ctx = context.WithValue(ctx, DISCORD_ID_KEY, discordID)
 		}
 	}
+
+	ctx = context.WithValue(ctx, SID_KEY, sid)
 
 	return ctx
 }

@@ -16,13 +16,15 @@ func TestClientID(t *testing.T) {
 func TestNewClient(t *testing.T) {
 	var (
 		discordID = "9"
+		sid       = "sid_key"
 		userID    = int32(9)
 	)
 
-	t.Run("UserID and DiscordID Present", func(t *testing.T) {
+	t.Run("UserID, DiscordID, & SID Present", func(t *testing.T) {
 		ctx := context.Background()
 		ctx = context.WithValue(ctx, USER_ID_KEY, userID)
 		ctx = context.WithValue(ctx, DISCORD_ID_KEY, discordID)
+		ctx = context.WithValue(ctx, SID_KEY, sid)
 
 		client := newClient(ctx, "connId=9", nil)
 
@@ -32,6 +34,10 @@ func TestNewClient(t *testing.T) {
 
 		if *client.DiscordID != discordID {
 			t.Errorf("Expected client's DiscordID = %s, got %s", discordID, *client.DiscordID)
+		}
+
+		if client.SID != sid {
+			t.Errorf("Expected client's SID = %s, got %s", sid, client.SID)
 		}
 
 		if client.send == nil {

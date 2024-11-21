@@ -21,6 +21,7 @@ type Client struct {
 	connID    string
 	UserID    int32   `json:"userId,omitempty"`
 	DiscordID *string `json:"discordId,omitempty"`
+	SID       string  `json:"sid"`
 }
 
 func (c *Client) Conn() *websocket.Conn {
@@ -55,14 +56,18 @@ func newClient(ctx context.Context, connKey string, conn *websocket.Conn) *Clien
 		client.DiscordID = &discordID
 	}
 
+	if SID, ok := ctx.Value(SID_KEY).(string); ok {
+		client.SID = SID
+	}
+
 	return client
 }
 
 // messageReceiver listens for incoming messages from the client
 // and processes them based on the message type.
-func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel context.CancelFunc) {
+func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel context.CancelCauseFunc) {
 	defer func() {
-		cancel()
+		cancel(nil)
 		p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 		p.unregister <- client
 		client.Conn().Close(websocket.StatusNormalClosure, "Client disconnected")
@@ -73,7 +78,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 		if err != nil {
 			if ctx.Err() != nil {
 				p.LogInfo("Context was canceled, exiting messageReceiver.")
-				client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
+				client.Conn().Close(websocket.StatusNormalClosure, context.Cause(ctx).Error())
 				return
 			}
 

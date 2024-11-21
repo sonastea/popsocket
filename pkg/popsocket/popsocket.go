@@ -2,6 +2,7 @@ package popsocket
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -290,11 +291,11 @@ func serveWs(p *PopSocket, w http.ResponseWriter, r *http.Request) {
 	client.Conn().SetReadLimit(MaxMessageSize)
 
 	p.register <- client
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 
 	go p.messageReceiver(ctx, client, cancel)
 	go p.messageSender(ctx, client)
-	go p.heartbeat(ctx, client, heartbeatPeriod)
+	go p.heartbeat(ctx, client, 3*time.Second, cancel)
 
 	/* clientId := "1"
 			hashKey := fmt.Sprintf("convosession:%s", clientId)
@@ -324,28 +325,35 @@ func (p *PopSocket) SetupRoutes(mux *http.ServeMux) error {
 }
 
 // heartbeat sends periodic ping messages to the client to ensure the connection is still active.
-func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.Duration) {
+func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.Duration, cancel context.CancelCauseFunc) {
 	ticker := time.NewTimer(period)
-
-	defer func() {
-		ticker.Stop()
-		client.conn.Close(websocket.StatusNormalClosure, "Heartbeat gone.")
-	}()
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// TODO: Validate session has not expired, close connection if that's not the case.
-			err := client.conn.Ping(ctx)
-			if err != nil {
+			// Manually ping the client.
+			if err := client.conn.Ping(ctx); err != nil {
 				p.LogInfo(fmt.Sprintf("[%s] ping error: %+v \n", time.Now().Local(), err))
 				client.conn.Close(websocket.StatusPolicyViolation, "Pong not received.")
 				return
 			}
-			ticker.Reset(period)
+
+			expired, err := p.sessionStore.HasExpired(ctx, client.SID)
+			if err != nil {
+				p.LogError("Error checking session expiration:", err)
+				return
+			}
+			if expired {
+				p.LogInfo(fmt.Sprintf("Session expired for clientID %d, connID %s.", client.ID(), client.ConnID()))
+				cancel(errors.New("Session expired."))
+				return
+			}
+
 			p.LogInfo(fmt.Sprintf("Sent heartbeat to userID %d, connID %s", client.ID(), client.ConnID()))
+			ticker.Reset(period)
 		}
 	}
 }

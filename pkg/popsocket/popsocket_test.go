@@ -227,6 +227,7 @@ func TestServeWs(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	ctx = context.WithValue(ctx, USER_ID_KEY, "9")
+	ctx = context.WithValue(ctx, SID_KEY, "sid_key")
 	defer cancel()
 
 	go func() {
