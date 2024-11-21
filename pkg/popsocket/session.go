@@ -2,6 +2,7 @@ package popsocket
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 type SessionStore interface {
 	Find(ctx context.Context, sid string) (Session, error)
+	HasExpired(ctx context.Context, sid string) (bool, error)
 	UserFromDiscordID(ctx context.Context, discordID string) (int32, error)
 }
 
@@ -73,6 +75,24 @@ func (ss *sessionStore) Find(ctx context.Context, sid string) (Session, error) {
 	}
 
 	return session, nil
+}
+
+// HasExpired queries the database for a session matching the sid
+// and returns a bool and an error indicating the session's expiration status.
+func (ss *sessionStore) HasExpired(ctx context.Context, sid string) (bool, error) {
+	var expiresAt time.Time
+
+	query := `SELECT s."expiresAt" FROM "Session" s WHERE s.sid = $1`
+	err := ss.db.QueryRow(ctx, query, sid).Scan(&expiresAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return true, nil // Consider missing session as expired.
+		}
+		Logger().Debug(fmt.Sprintf("%+v", err))
+		return false, err
+	}
+
+	return time.Now().After(expiresAt), nil
 }
 
 // UserFromDiscordID finds the client's user id to fulfill the client's id field.

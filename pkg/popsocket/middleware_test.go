@@ -106,6 +106,7 @@ func TestValidateCookie(t *testing.T) {
 		handler := sm.ValidateCookie(nextHandler)
 		handler.ServeHTTP(rr, req)
 	})
+
 	t.Run("Unable to extract session id", func(t *testing.T) {
 		mockStore := &MockSessionStore{
 			FindFunc: func(ctx context.Context, sid string) (Session, error) {
