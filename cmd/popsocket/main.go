@@ -22,7 +22,7 @@ func Run(ctx context.Context, valkey valkey.Client) error {
 		return fmt.Errorf("Failed to create postgres instance: %w", err)
 	}
 
-	messageStore := popsocket.NewMessageStore(db)
+	messageStore := popsocket.NewMessageStore(valkey, db)
 	sessionStore := popsocket.NewSessionStore(db)
 
 	messageService := popsocket.NewMessageService(messageStore)

@@ -340,7 +340,7 @@ func TestWithOpts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Expected new valkey client, got %s", err)
 		}
-		messageStore := NewMessageStore(mock_db.New())
+		messageStore := NewMessageStore(vk, mock_db.New())
 		messageService := NewMessageService(messageStore)
 
 		ps, err := New(vk, WithMessageService(messageService))

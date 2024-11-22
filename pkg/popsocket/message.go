@@ -2,11 +2,16 @@ package popsocket
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"github.com/sonastea/popsocket/pkg/db"
+	"github.com/valkey-io/valkey-go"
+	"google.golang.org/protobuf/proto"
 )
 
 type MessageStore interface {
@@ -19,8 +24,11 @@ type MessageService struct {
 }
 
 type messageStore struct {
-	db db.DB
+	cache valkey.Client
+	db    db.DB
 }
+
+const CONVERSATION_TTL = 604800 // 7 days in seconds
 
 // NewMessageService creates a new instance of MessageService.
 func NewMessageService(store MessageStore) MessageService {
@@ -30,11 +38,20 @@ func NewMessageService(store MessageStore) MessageService {
 }
 
 // NewMessageStore creates a new instance of sessionStore.
-func NewMessageStore(db db.DB) *messageStore {
-	return &messageStore{db: db}
+func NewMessageStore(cache valkey.Client, db db.DB) *messageStore {
+	return &messageStore{
+		cache: cache,
+		db:    db,
+	}
 }
 
+// Convos retrieves user's conversations and messages in the cache or the database on a cache miss.
 func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error) {
+	result, _ := ms.convosInCache(ctx, user_id)
+	if result != nil {
+		return result, nil
+	}
+
 	query := `
         WITH user_conversations AS (
           SELECT DISTINCT c.id, c.convid
@@ -120,12 +137,15 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 		return nil, fmt.Errorf("Error iterating rows: %w", err)
 	}
 
-	result := &ipc.ContentConversationsResponse{
+	result = &ipc.ContentConversationsResponse{
 		Conversations: make([]*ipc.Conversation, 0, len(conversationsMap)),
 	}
+
 	for _, conv := range conversationsMap {
 		result.Conversations = append(result.Conversations, conv)
+		ms.saveConversationSession(conv.Id)
 	}
+	ms.convosToCache(ctx, result, user_id)
 
 	return result, nil
 }
@@ -148,4 +168,37 @@ func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAs
 		To:     msg.To,
 		Read:   true,
 	}, nil
+}
+
+// convosInCache retrieves convos in the cache and returns nil on a cache miss
+func (ms *messageStore) convosInCache(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error) {
+	k := fmt.Sprintf("convos:%d", user_id)
+	bd, err := ms.cache.Do(ctx, ms.cache.B().Get().Key(k).Build()).AsBytes()
+	if err != nil {
+		if strings.Contains(err.Error(), "valkey nil message") {
+			return nil, nil
+		}
+		Logger().Error(fmt.Sprintf("Error retrieving convos in cache: %v", err))
+	}
+
+	res := &ipc.ContentConversationsResponse{}
+	err = proto.Unmarshal(bd, res)
+	if err != nil {
+		return nil, errors.New("Error unmarshalling convos from cache")
+	}
+
+	return res, nil
+}
+
+func (ms *messageStore) saveConversationSession(clientId int32) {
+	ms.cache.Do(context.Background(),
+		ms.cache.B().Hset().Key(fmt.Sprintf("convosession:%d", clientId)).FieldValue().FieldValue("id", strconv.FormatInt(int64(clientId), 10)).Build(),
+	)
+}
+
+func (ms *messageStore) convosToCache(ctx context.Context, convosResp *ipc.ContentConversationsResponse, user_id int32) {
+	bd, _ := proto.Marshal(convosResp)
+	ms.cache.Do(ctx,
+		ms.cache.B().Set().Key(fmt.Sprintf("convos:%d", user_id)).Value(string(bd)).Build(),
+	)
 }
