@@ -52,8 +52,6 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 
 	regularMsg := &ipc.Message{}
 	if err := proto.Unmarshal(recv, regularMsg); err == nil {
-		// TODO: Generate CONVID(UUID) and CreatedAt in database layer?
-		regularMsg.CreatedAt = time.Now().Format(time.RFC3339)
 		return &ParsedMessage{
 			Type:    RegularMessageType,
 			Message: regularMsg,
@@ -61,6 +59,21 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 	}
 
 	return nil, fmt.Errorf(ParseEventMessageError)
+}
+
+// sanitizeCreatedAt ensures regular messages have a reliable and nonspoofed timestamp
+func sanitizeCreatedAt(message *ipc.Message) {
+	now := time.Now()
+	createdAt, err := time.Parse(time.RFC3339, message.CreatedAt)
+	if err != nil {
+		Logger().Error(fmt.Sprintf("Failed to parse CreatedAt timestamp: %v", err))
+		message.CreatedAt = now.Format(time.RFC3339)
+		return
+	}
+
+	if createdAt.After(now) {
+		message.CreatedAt = now.Format(time.RFC3339)
+	}
 }
 
 func (p *PopSocket) processEventMessage(ctx context.Context, client client, m *ipc.EventMessage) {
