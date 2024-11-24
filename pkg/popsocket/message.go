@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"github.com/sonastea/popsocket/pkg/db"
 	"github.com/valkey-io/valkey-go"
@@ -16,6 +17,7 @@ import (
 
 type MessageStore interface {
 	Convos(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error)
+	Save(ctx context.Context, msg *ipc.Message) (*ipc.Message, error)
 	UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAsRead) (*ipc.ContentMarkAsReadResponse, error)
 }
 
@@ -150,14 +152,53 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 	return result, nil
 }
 
+func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Message, error) {
+	tx, err := ms.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var convid int
+
+	err = tx.QueryRow(ctx, `INSERT INTO "Conversation" (convid) VALUES ($1)
+		ON CONFLICT (convid) DO NOTHING
+		RETURNING id
+		`, msg.Convid).Scan(&convid)
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, err
+	}
+
+	_, err = tx.Exec(ctx, `INSERT INTO "_ConversationToUser" ("A", "B") VALUES ($1, $2), ($1, $3)
+		ON CONFLICT DO NOTHING`, convid, msg.From, msg.To)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO "Message" ("convId", "recipientId","userId", content, "createdAt", "fromSelf", read)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		msg.Convid, msg.To, msg.From, msg.Content, msg.CreatedAt, msg.FromSelf, msg.Read)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.Commit(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return msg, nil
+}
+
 func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAsRead) (*ipc.ContentMarkAsReadResponse, error) {
 	query := `
     UPDATE "Message"
     SET read = true
-    WHERE "convId" = $1 AND "recipientId" = $2 AND read = false
+    WHERE "convId" = $1 AND "recipientId" = $2 AND "userId" = $3 AND read = false
   `
 
-	_, err := ms.db.Exec(ctx, query, msg.Convid, msg.To)
+	_, err := ms.db.Exec(ctx, query, msg.Convid, msg.To, msg.From)
 	if err != nil {
 		return &ipc.ContentMarkAsReadResponse{}, err
 	}
@@ -201,4 +242,14 @@ func (ms *messageStore) convosToCache(ctx context.Context, convosResp *ipc.Conte
 	ms.cache.Do(ctx,
 		ms.cache.B().Set().Key(fmt.Sprintf("convos:%d", user_id)).Value(string(bd)).Build(),
 	)
+}
+
+func toWireFormat(msg proto.Message) []byte {
+	b, err := proto.Marshal(msg)
+	if err != nil {
+		Logger().Error("[PARSE REG ERROR] " + err.Error())
+		return nil
+	}
+
+	return b
 }

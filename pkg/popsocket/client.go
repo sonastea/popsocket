@@ -104,6 +104,8 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 
 // messageSender dispatches messages from the PopSocket server to the associated client.
 func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
+	// TODO: new message should invalidate convos:{user_id}, so the user's retrieving the
+	// convos aren't getting stale data (missing newer messages)
 	for {
 		select {
 		case <-ctx.Done():
