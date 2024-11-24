@@ -208,7 +208,7 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 	return msg, nil
 }
 
-// UpdateAsRead updates the message's read status in the `ContentMarkAsRead` as read.
+// UpdateAsRead updates the message's read status in the `ContentMarkAsRead` as read in the database.
 func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAsRead) (*ipc.ContentMarkAsReadResponse, error) {
 	query := `
     UPDATE "Message"

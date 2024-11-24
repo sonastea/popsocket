@@ -25,6 +25,8 @@ type ParsedMessage struct {
 	Message      *ipc.Message
 }
 
+// handleMessages is the central hub that parses the received message
+// over-wire and delegates it to the logic depending on its type
 func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []byte) {
 	parsed, err := parseMessage(recv)
 	if err != nil {
@@ -139,6 +141,7 @@ func (p *PopSocket) processRegularMessage(send []byte, m *ipc.Message) {
 	}
 }
 
+// writeEventMessage is a helper function to send an EventMessage to the given user.
 func (p *PopSocket) writeEventMessage(client client, msg *ipc.EventMessage) error {
 	if msg == nil {
 		return fmt.Errorf("Marshal error: msg passed is nil")
@@ -150,6 +153,7 @@ func (p *PopSocket) writeEventMessage(client client, msg *ipc.EventMessage) erro
 	return nil
 }
 
+// connect is the initial check a client properly connected to the websocket server as a user.
 func (p *PopSocket) connect(client client) {
 	message := &ipc.EventMessage{
 		Event: ipc.EventType_CONNECT,
@@ -163,6 +167,7 @@ func (p *PopSocket) connect(client client) {
 	}
 }
 
+// conversations calls to the message store to retrieve the user's convos.
 func (p *PopSocket) conversations(ctx context.Context, client client) {
 	result, err := p.messageStore.Convos(ctx, client.ID())
 	if err != nil {
@@ -183,6 +188,8 @@ func (p *PopSocket) conversations(ctx context.Context, client client) {
 	}
 }
 
+// delConvosCache is a helper function that removes the convo:key between two
+// users to avoid retrieving stale convos when processing regular messages.
 func (p *PopSocket) delConvosCache(ctx context.Context, to_id int32, from_id int32) {
 	p.Valkey.DoMulti(ctx,
 		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", to_id)).Build(),
@@ -190,6 +197,8 @@ func (p *PopSocket) delConvosCache(ctx context.Context, to_id int32, from_id int
 	)
 }
 
+// read handles the logic of marking a message as read by calling to
+// messageStore.UpdateAsRead and invalidating any cache in case of stale convos.
 func (p *PopSocket) read(ctx context.Context, client client, m *ipc.ContentMarkAsRead) {
 	result, err := p.messageStore.UpdateAsRead(ctx, m)
 	if err != nil {
