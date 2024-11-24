@@ -130,7 +130,7 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 		}
 		msg.CreatedAt = createdAt.Format(time.RFC3339)
 		existingConv.Messages = append(existingConv.Messages, &msg)
-		if !msg.Read && !msg.FromSelf {
+		if !msg.Read && !msg.FromSelf && msg.To == user_id {
 			existingConv.Unread++
 		}
 	}
@@ -152,6 +152,7 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 	return result, nil
 }
 
+// Save upserts a Conversations between users and adds or updates connected messages to the db.
 func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Message, error) {
 	tx, err := ms.db.Begin(ctx)
 	if err != nil {
@@ -183,6 +184,22 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 		return nil, err
 	}
 
+	if !msg.FromSelf {
+		var displayName, photo, username *string
+		err = tx.QueryRow(ctx, `
+			SELECT displayname, photo, username
+			FROM "User" WHERE id = $1`, msg.From).Scan(&displayName, &photo, &username)
+		if err != nil {
+			return nil, err
+		}
+
+		msg.FromPhoto = photo
+		msg.FromUser = displayName
+		if msg.FromUser == nil {
+			msg.FromUser = username
+		}
+	}
+
 	err = tx.Commit(ctx)
 	if err != nil {
 		return nil, err
@@ -191,6 +208,7 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 	return msg, nil
 }
 
+// UpdateAsRead updates the message's read status in the `ContentMarkAsRead` as read.
 func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAsRead) (*ipc.ContentMarkAsReadResponse, error) {
 	query := `
     UPDATE "Message"
@@ -211,7 +229,7 @@ func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAs
 	}, nil
 }
 
-// convosInCache retrieves convos in the cache and returns nil on a cache miss
+// convosInCache retrieves convos in the cache and returns nil on a cache miss.
 func (ms *messageStore) convosInCache(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error) {
 	k := fmt.Sprintf("convos:%d", user_id)
 	bd, err := ms.cache.Do(ctx, ms.cache.B().Get().Key(k).Build()).AsBytes()
@@ -231,12 +249,15 @@ func (ms *messageStore) convosInCache(ctx context.Context, user_id int32) (*ipc.
 	return res, nil
 }
 
+// saveConversationSession saves user id as a hashed key to the cache.
+// This is a leftover implementation from the nestjs implementation.
 func (ms *messageStore) saveConversationSession(clientId int32) {
 	ms.cache.Do(context.Background(),
 		ms.cache.B().Hset().Key(fmt.Sprintf("convosession:%d", clientId)).FieldValue().FieldValue("id", strconv.FormatInt(int64(clientId), 10)).Build(),
 	)
 }
 
+// convosToCache saves the response from `Convos` to the cache for faster retrieval.
 func (ms *messageStore) convosToCache(ctx context.Context, convosResp *ipc.ContentConversationsResponse, user_id int32) {
 	bd, _ := proto.Marshal(convosResp)
 	ms.cache.Do(ctx,
@@ -244,6 +265,7 @@ func (ms *messageStore) convosToCache(ctx context.Context, convosResp *ipc.Conte
 	)
 }
 
+// toWireFormat simply serializes the ipc messages to wire-format in []byte.
 func toWireFormat(msg proto.Message) []byte {
 	b, err := proto.Marshal(msg)
 	if err != nil {
