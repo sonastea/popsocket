@@ -134,9 +134,12 @@ func (p *PopSocket) processRegularMessage(send []byte, m *ipc.Message) {
 			client.Send() <- send
 		}
 	}
-	if sender, ok := p.clients[m.From]; ok {
-		for _, client := range sender {
-			client.Send() <- send
+
+	if !m.FromSelf {
+		if sender, ok := p.clients[m.From]; ok {
+			for _, client := range sender {
+				client.Send() <- send
+			}
 		}
 	}
 }

@@ -110,47 +110,93 @@ func TestWriteEventMessage(t *testing.T) {
 }
 
 func TestProcessRegularMessage(t *testing.T) {
-	logger, _ := newTestLogger()
-	sender := mock_client.New("sender", 1, "1")
-	receiver := mock_client.New("receiver", 9, "9")
-	p := &PopSocket{
-		logger: logger,
-		clients: map[int32]map[string]client{
-			1: {
-				"sender": sender,
+	t.Run("Message between two users", func(t *testing.T) {
+		logger, _ := newTestLogger()
+		sender := mock_client.New("sender", 1, "1")
+		receiver := mock_client.New("receiver", 9, "9")
+		p := &PopSocket{
+			logger: logger,
+			clients: map[int32]map[string]client{
+				1: {
+					"sender": sender,
+				},
+				9: {
+					"receiver": receiver,
+				},
 			},
-			9: {
-				"receiver": receiver,
+			mu: sync.RWMutex{},
+		}
+
+		content := "foo-bar"
+		m := &ipc.Message{
+			Content: &content,
+			To:      1,
+			From:    9,
+		}
+
+		send, err := proto.Marshal(m)
+		if err != nil {
+			t.Fatalf("Failed to marshal ipc message")
+		}
+
+		p.processRegularMessage(send, m)
+
+		select {
+		case msg := <-receiver.Send():
+			if !bytes.Equal(msg, send) {
+				t.Fatal("[Receiver] Expected receiver client to get message")
+			}
+		}
+
+		select {
+		case msg := <-sender.Send():
+			if !bytes.Equal(msg, send) {
+				t.Fatal("[Sender] Expected sender client to get message")
+			}
+		}
+	})
+
+	t.Run("Message between self", func(t *testing.T) {
+		logger, _ := newTestLogger()
+		self := mock_client.New("self", 1, "1")
+		p := &PopSocket{
+			logger: logger,
+			clients: map[int32]map[string]client{
+				1: {
+					"self": self,
+				},
 			},
-		},
-		mu: sync.RWMutex{},
-	}
-
-	content := "foo-bar"
-	m := &ipc.Message{
-		Content: &content,
-		To:      1,
-		From:    9,
-	}
-
-	send, err := proto.Marshal(m)
-	if err != nil {
-		t.Fatalf("Failed to marshal ipc message")
-	}
-
-	p.processRegularMessage(send, m)
-
-	select {
-	case msg := <-receiver.Send():
-		if !bytes.Equal(msg, send) {
-			t.Fatal("[Receiver] Expected receiver client to get message")
+			mu: sync.RWMutex{},
 		}
-	}
 
-	select {
-	case msg := <-sender.Send():
-		if !bytes.Equal(msg, send) {
-			t.Fatal("[Sender] Expected sender client to get message")
+		content := "self-message"
+		m := &ipc.Message{
+			Content:  &content,
+			To:       1,
+			From:     1,
+			FromSelf: true,
 		}
-	}
+
+		send, err := proto.Marshal(m)
+		if err != nil {
+			t.Fatalf("Failed to marshal ipc message")
+		}
+
+		p.processRegularMessage(send, m)
+
+		select {
+		case msg := <-self.Send():
+			if !bytes.Equal(msg, send) {
+				t.Fatal("[Self] Expected self client to get message")
+			}
+		default:
+			t.Fatal("[Self] Did not receive the expected message")
+		}
+
+		select {
+		case <-self.Send():
+			t.Fatal("[Self] Received duplicate message")
+		default:
+		}
+	})
 }
