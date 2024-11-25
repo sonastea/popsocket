@@ -19,6 +19,10 @@ test/cover:
 	go test -v -race -buildvcs -coverprofile=/tmp/coverage.out ./...
 	go tool cover -html=/tmp/coverage.out
 
+.PHONY: docker-image
+docker-image:
+	docker build -t sonastea/popsocket:latest .
+
 #=================#
 # QUALITY CONTROL #
 #=================#
