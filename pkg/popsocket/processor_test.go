@@ -138,7 +138,7 @@ func TestProcessRegularMessage(t *testing.T) {
 		t.Fatalf("Failed to marshal ipc message")
 	}
 
-	p.processRegularMessage(send, &ParsedMessage{Type: 1, Message: m})
+	p.processRegularMessage(send, m)
 
 	select {
 	case msg := <-receiver.Send():

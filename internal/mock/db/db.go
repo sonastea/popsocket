@@ -14,6 +14,16 @@ func New() db.DB {
 	return &mockDB{}
 }
 
+// Begin wraps the pgxpool.Pool's Begin method.
+func (md *mockDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	return nil, nil // Begin(ctx)
+}
+
+// BeginTx wraps the pgxpool.Pool's BeginTx method.
+func (md *mockDB) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+	return nil, nil // BeginTx(ctx, txOptions)
+}
+
 // Exec wraps the pgxpool.Pool's Exec method.
 func (md *mockDB) Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil // Exec(ctx, query, args...)

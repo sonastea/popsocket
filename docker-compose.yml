@@ -1,0 +1,19 @@
+networks:
+  kpoppop_default:
+    external: true
+
+services:
+  popsocket:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    networks:
+      - kpoppop_default
+    expose:
+      - "8081"
+    environment:
+      - POPSOCKET_ADDR=:8081
+      - REDIS_URL=kpoppop_valkey:6379
+      - DATABASE_URL=${DATABASE_URL}
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+    restart: unless-stopped

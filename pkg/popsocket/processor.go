@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,6 +25,8 @@ type ParsedMessage struct {
 	Message      *ipc.Message
 }
 
+// handleMessages is the central hub that parses the received message
+// over-wire and delegates it to the logic depending on its type
 func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []byte) {
 	parsed, err := parseMessage(recv)
 	if err != nil {
@@ -35,8 +38,25 @@ func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []by
 	case EventMessageType:
 		p.processEventMessage(ctx, client, parsed.EventMessage)
 	case RegularMessageType:
-		go p.processRegularMessage(recv, parsed)
+		p.handleRegularMessage(ctx, parsed)
 	}
+}
+
+func (p *PopSocket) handleRegularMessage(ctx context.Context, parsed *ParsedMessage) {
+	sanitizeCreatedAt(parsed.Message)
+	staleConvo := sanitizeConvid(parsed.Message)
+	if staleConvo {
+		p.delConvosCache(ctx, parsed.Message.To, parsed.Message.From)
+	}
+
+	m, err := p.messageStore.Save(ctx, parsed.Message)
+	if err != nil {
+		p.LogError("Problem saving message: " + err.Error())
+		return
+	}
+
+	cleanRecv := toWireFormat(m)
+	go p.processRegularMessage(cleanRecv, m)
 }
 
 func parseMessage(recv []byte) (*ParsedMessage, error) {
@@ -61,7 +81,7 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 	return nil, fmt.Errorf(ParseEventMessageError)
 }
 
-// sanitizeCreatedAt ensures regular messages have a reliable and nonspoofed timestamp
+// sanitizeCreatedAt ensures regular messages have a reliable and nonspoofed timestamp.
 func sanitizeCreatedAt(message *ipc.Message) {
 	now := time.Now()
 	createdAt, err := time.Parse(time.RFC3339, message.CreatedAt)
@@ -76,6 +96,19 @@ func sanitizeCreatedAt(message *ipc.Message) {
 	}
 }
 
+// sanitizeConvid ensures regular messages contain a convid to properly process them.
+// returns true if convid is missing and we should invalidate the convos:#
+// in cache assuming a new coversation will be created
+func sanitizeConvid(message *ipc.Message) bool {
+	if message.Convid == "" {
+		convid := uuid.New()
+		message.Convid = convid.String()
+		return true
+	}
+
+	return false
+}
+
 func (p *PopSocket) processEventMessage(ctx context.Context, client client, m *ipc.EventMessage) {
 	switch m.Event {
 	case ipc.EventType_CONNECT:
@@ -83,28 +116,32 @@ func (p *PopSocket) processEventMessage(ctx context.Context, client client, m *i
 	case ipc.EventType_CONVERSATIONS:
 		p.conversations(ctx, client)
 	case ipc.EventType_MARK_AS_READ:
+		if client.ID() != m.GetReqRead().To {
+			return
+		}
 		p.read(ctx, client, m.GetReqRead())
 	default:
 		p.LogWarn("[UNHANDLED EventMessage] " + m.String())
 	}
 }
 
-func (p *PopSocket) processRegularMessage(send []byte, m *ParsedMessage) {
+func (p *PopSocket) processRegularMessage(send []byte, m *ipc.Message) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if recipients, ok := p.clients[m.Message.To]; ok {
+	if recipients, ok := p.clients[m.To]; ok {
 		for _, client := range recipients {
 			client.Send() <- send
 		}
 	}
-	if sender, ok := p.clients[m.Message.From]; ok {
+	if sender, ok := p.clients[m.From]; ok {
 		for _, client := range sender {
 			client.Send() <- send
 		}
 	}
 }
 
+// writeEventMessage is a helper function to send an EventMessage to the given user.
 func (p *PopSocket) writeEventMessage(client client, msg *ipc.EventMessage) error {
 	if msg == nil {
 		return fmt.Errorf("Marshal error: msg passed is nil")
@@ -116,6 +153,7 @@ func (p *PopSocket) writeEventMessage(client client, msg *ipc.EventMessage) erro
 	return nil
 }
 
+// connect is the initial check a client properly connected to the websocket server as a user.
 func (p *PopSocket) connect(client client) {
 	message := &ipc.EventMessage{
 		Event: ipc.EventType_CONNECT,
@@ -129,6 +167,7 @@ func (p *PopSocket) connect(client client) {
 	}
 }
 
+// conversations calls to the message store to retrieve the user's convos.
 func (p *PopSocket) conversations(ctx context.Context, client client) {
 	result, err := p.messageStore.Convos(ctx, client.ID())
 	if err != nil {
@@ -149,12 +188,24 @@ func (p *PopSocket) conversations(ctx context.Context, client client) {
 	}
 }
 
+// delConvosCache is a helper function that removes the convo:key between two
+// users to avoid retrieving stale convos when processing regular messages.
+func (p *PopSocket) delConvosCache(ctx context.Context, to_id int32, from_id int32) {
+	p.Valkey.DoMulti(ctx,
+		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", to_id)).Build(),
+		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", from_id)).Build(),
+	)
+}
+
+// read handles the logic of marking a message as read by calling to
+// messageStore.UpdateAsRead and invalidating any cache in case of stale convos.
 func (p *PopSocket) read(ctx context.Context, client client, m *ipc.ContentMarkAsRead) {
 	result, err := p.messageStore.UpdateAsRead(ctx, m)
 	if err != nil {
 		p.LogWarn(err.Error(), result)
 	}
 
+	p.delConvosCache(ctx, m.To, m.From)
 	message := &ipc.EventMessage{
 		Event: ipc.EventType_MARK_AS_READ,
 		Content: &ipc.EventMessage_RespRead{

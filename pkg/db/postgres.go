@@ -20,6 +20,16 @@ var (
 	pgOnce sync.Once
 )
 
+// Begin wraps the pgxpool.Pool's Begin method.
+func (pg *postgres) Begin(ctx context.Context) (pgx.Tx, error) {
+	return pg.pool.Begin(ctx)
+}
+
+// BeginTx wraps the pgxpool.Pool's BeginTx method.
+func (pg *postgres) BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error) {
+	return pg.pool.BeginTx(ctx, txOptions)
+}
+
 // Exec wraps the pgxpool.Pool's Exec method.
 func (pg *postgres) Exec(ctx context.Context, query string, args ...interface{}) (pgconn.CommandTag, error) {
 	return pg.pool.Exec(ctx, query, args...)

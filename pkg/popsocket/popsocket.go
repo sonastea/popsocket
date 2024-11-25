@@ -296,23 +296,6 @@ func serveWs(p *PopSocket, w http.ResponseWriter, r *http.Request) {
 	go p.messageReceiver(ctx, client, cancel)
 	go p.messageSender(ctx, client)
 	go p.heartbeat(ctx, client, 3*time.Second, cancel)
-
-	/* clientId := "1"
-			hashKey := fmt.Sprintf("convosession:%s", clientId)
-			err = p.Valkey.Do(r.Context(), p.Valkey.B().Hset().Key(hashKey).FieldValue().FieldValue("id", clientId).Build()).Error()
-			if err != nil {
-				p.LogError("Failed to set hash field: ", err)
-			}
-			keys := make(map[string]bool)
-			cursor := uint64(0)
-			results, _ := p.Valkey.Do(r.Context(), p.Valkey.B().Scan().Cursor(cursor).Match("convosession:*").Count(100).Build()).AsScanEntry()
-
-			for _, key := range results.Elements {
-				keys[key] = true
-			}
-
-	    cursor = nextCursor
-			fmt.Printf("%+v \n", keys) */
 }
 
 // SetupRoutes registers the http routes for the PopSocket server.
@@ -352,7 +335,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 				return
 			}
 
-			p.LogInfo(fmt.Sprintf("Sent heartbeat to userID %d, connID %s", client.ID(), client.ConnID()))
+			p.LogDebug(fmt.Sprintf("Sent heartbeat to userID %d, connID %s", client.ID(), client.ConnID()))
 			ticker.Reset(period)
 		}
 	}
