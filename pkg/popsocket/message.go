@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"github.com/sonastea/popsocket/pkg/db"
 	"github.com/valkey-io/valkey-go"
@@ -136,7 +137,67 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("Error iterating rows: %w", err)
+		return nil, fmt.Errorf("Error iterating conversation rows: %w", err)
+	}
+
+	selfQuery := `
+		SELECT
+				u.id, c.convid, u.username, u.displayname, u.photo, u.status,
+				m."recipientId", m."userId", m.content, m."createdAt", m."fromSelf", m.read
+		FROM "Conversation" c
+		JOIN "_ConversationToUser" cu ON c.id = cu."A"
+		JOIN "User" u ON cu."B" = u.id
+		LEFT JOIN "Message" m ON c.convid = m."convId"
+		WHERE cu."B" = $1
+		ORDER BY m."createdAt" asc
+		`
+
+	selfRows, err := ms.db.Query(ctx, selfQuery, user_id)
+	if err != nil {
+		return nil, fmt.Errorf("Error querying self conversation: %w", err)
+	}
+	defer selfRows.Close()
+
+	for selfRows.Next() {
+		var conv ipc.Conversation
+		var msg ipc.Message
+		var recipientID, fromUserID *int32
+		var createdAt time.Time
+		err := selfRows.Scan(
+			&conv.Id,
+			&conv.Convid,
+			&conv.Username,
+			&conv.Displayname,
+			&conv.Photo,
+			&conv.Status,
+			&recipientID,
+			&fromUserID,
+			&msg.Content,
+			&createdAt,
+			&msg.FromSelf,
+			&msg.Read,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("Error scanning self conversation row: %w", err)
+		}
+
+		existingConv, exists := conversationsMap[conv.Convid]
+		if !exists {
+			conv.Messages = []*ipc.Message{}
+			conv.Unread = 0
+			conversationsMap[conv.Convid] = &conv
+			existingConv = &conv
+		}
+
+		msg.Convid = conv.Convid
+		if recipientID != nil {
+			msg.To = *recipientID
+		}
+		if fromUserID != nil {
+			msg.From = *fromUserID
+		}
+		msg.CreatedAt = createdAt.Format(time.RFC3339)
+		existingConv.Messages = append(existingConv.Messages, &msg)
 	}
 
 	result = &ipc.ContentConversationsResponse{
@@ -154,13 +215,13 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 
 // Save upserts a Conversations between users and adds or updates connected messages to the db.
 func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Message, error) {
+	var convid int
+
 	tx, err := ms.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
-
-	var convid int
 
 	err = tx.QueryRow(ctx, `INSERT INTO "Conversation" (convid) VALUES ($1)
 		ON CONFLICT (convid) DO NOTHING
@@ -171,9 +232,23 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 	}
 
 	_, err = tx.Exec(ctx, `INSERT INTO "_ConversationToUser" ("A", "B") VALUES ($1, $2), ($1, $3)
-		ON CONFLICT DO NOTHING`, convid, msg.From, msg.To)
+		ON CONFLICT DO NOTHING
+		`, convid, msg.From, msg.To)
 	if err != nil {
-		return nil, err
+		pgErr, ok := err.(*pgconn.PgError)
+		if !ok || pgErr.Code != "23503" {
+			return nil, err
+		}
+
+		err = tx.Rollback(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		tx, err = ms.db.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	_, err = tx.Exec(ctx, `
