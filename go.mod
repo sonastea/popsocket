@@ -7,7 +7,7 @@ require (
 	github.com/coder/websocket v1.8.12
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.1
-	github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.11
+	github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.12
 	github.com/valkey-io/valkey-go v1.0.49
 	google.golang.org/protobuf v1.35.2
 )
