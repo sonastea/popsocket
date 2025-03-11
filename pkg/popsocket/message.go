@@ -148,7 +148,7 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 		JOIN "_ConversationToUser" cu ON c.id = cu."A"
 		JOIN "User" u ON cu."B" = u.id
 		LEFT JOIN "Message" m ON c.convid = m."convId"
-		WHERE cu."B" = $1
+		WHERE cu."B" = $1 AND (m."fromSelf" = true OR m."fromSelf" IS NULL)
 		ORDER BY m."createdAt" asc
 		`
 
