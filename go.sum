@@ -35,6 +35,8 @@ github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.11 h1:Y43ob2JLnlQFwNpAAexhu
 github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.11/go.mod h1:nWSl/DBaUoqTc1t6T3qaDQzPdoos+z1fuSGDiqQ7SgI=
 github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.12 h1:BE973YdyjaYO8dhQ0n/6I6g3v1NZLvlpssrLNUmmQIs=
 github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.12/go.mod h1:nWSl/DBaUoqTc1t6T3qaDQzPdoos+z1fuSGDiqQ7SgI=
+github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.14 h1:L8OfoxuueZMNA2dBpswYturTrY4RuItC20pAPFo3rHg=
+github.com/sonastea/kpoppop-grpc/ipc/go v1.0.0-alpha.14/go.mod h1:S25EtcJduLOnkTgfgKha0lDLsSpy72FFlmgw7c0GrUw=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
