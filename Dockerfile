@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN go mod download
 COPY . .
 RUN go build ./cmd/popsocket
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 WORKDIR /app
 
