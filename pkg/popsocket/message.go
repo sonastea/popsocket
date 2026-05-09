@@ -327,7 +327,8 @@ func (ms *messageStore) convosInCache(ctx context.Context, user_id int32) (*ipc.
 // saveConversationSession saves user id as a hashed key to the cache.
 // This is a leftover implementation from the nestjs implementation.
 func (ms *messageStore) saveConversationSession(clientId int32) {
-	ms.cache.Do(context.Background(),
+	ms.cache.Do(
+		context.Background(),
 		ms.cache.B().Hset().Key(fmt.Sprintf("convosession:%d", clientId)).FieldValue().FieldValue("id", strconv.FormatInt(int64(clientId), 10)).Build(),
 	)
 }
@@ -335,7 +336,8 @@ func (ms *messageStore) saveConversationSession(clientId int32) {
 // convosToCache saves the response from `Convos` to the cache for faster retrieval.
 func (ms *messageStore) convosToCache(ctx context.Context, convosResp *ipc.ContentConversationsResponse, user_id int32) {
 	bd, _ := proto.Marshal(convosResp)
-	ms.cache.Do(ctx,
+	ms.cache.Do(
+		ctx,
 		ms.cache.B().Set().Key(fmt.Sprintf("convos:%d", user_id)).Value(string(bd)).Build(),
 	)
 }

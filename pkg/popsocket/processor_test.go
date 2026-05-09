@@ -85,7 +85,7 @@ func TestParseMessage(t *testing.T) {
 }
 
 func TestHandleMessages(t *testing.T) {
-	t.Run(("Expect PARSE ERROR early return"), func(t *testing.T) {
+	t.Run("Expect PARSE ERROR early return", func(t *testing.T) {
 		logger, buf := newTestLogger()
 		p := &PopSocket{
 			logger: logger,

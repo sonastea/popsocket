@@ -194,7 +194,8 @@ func (p *PopSocket) conversations(ctx context.Context, client client) {
 // delConvosCache is a helper function that removes the convo:key between two
 // users to avoid retrieving stale convos when processing regular messages.
 func (p *PopSocket) delConvosCache(ctx context.Context, to_id int32, from_id int32) {
-	p.Valkey.DoMulti(ctx,
+	p.Valkey.DoMulti(
+		ctx,
 		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", to_id)).Build(),
 		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", from_id)).Build(),
 	)
