@@ -15,13 +15,12 @@ type client interface {
 }
 
 type Client struct {
-	conn *websocket.Conn
-	send chan []byte
-
-	connID    string
-	UserID    int32   `json:"userId,omitempty"`
+	conn      *websocket.Conn
+	send      chan []byte
 	DiscordID *string `json:"discordId,omitempty"`
-	SID       string  `json:"sid"`
+	connID    string
+	SID       string `json:"sid"`
+	UserID    int32  `json:"userId,omitempty"`
 }
 
 func (c *Client) Conn() *websocket.Conn {
@@ -70,7 +69,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 		cancel(nil)
 		p.LogInfo(fmt.Sprintf("Disconnected, context done for conn %s: client %d.", client.connID, client.ID()))
 		p.unregister <- client
-		client.Conn().Close(websocket.StatusNormalClosure, "Client disconnected")
+		_ = client.Conn().Close(websocket.StatusNormalClosure, "Client disconnected")
 	}()
 
 	for {
@@ -78,7 +77,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 		if err != nil {
 			if ctx.Err() != nil {
 				p.LogInfo("Context was canceled, exiting messageReceiver.")
-				client.Conn().Close(websocket.StatusNormalClosure, context.Cause(ctx).Error())
+				_ = client.Conn().Close(websocket.StatusNormalClosure, context.Cause(ctx).Error())
 				return
 			}
 
@@ -89,7 +88,7 @@ func (p *PopSocket) messageReceiver(ctx context.Context, client *Client, cancel 
 
 			case closeStatus != -1:
 				p.LogWarn(fmt.Sprintf("WebSocket closed for client %v, err: %+v", client.ID(), err))
-				client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
+				_ = client.Conn().Close(websocket.StatusNormalClosure, "Receiver error or context done.")
 				return
 
 			default:
@@ -113,9 +112,13 @@ func (p *PopSocket) messageSender(ctx context.Context, client *Client) {
 				return
 			}
 			writeCtx, cancel := context.WithTimeout(ctx, writeTimeout-10)
-			defer cancel()
-			if err := client.Conn().Write(writeCtx, websocket.MessageBinary, message); err != nil {
-				p.LogError("messageSender write error: %w", err)
+			err := client.Conn().Write(writeCtx, websocket.MessageBinary, message)
+			// Cancel immediately instead of deferring: a defer inside this
+			// loop would pile up one live timer per sent message until the
+			// sender exits.
+			cancel()
+			if err != nil {
+				p.LogError("messageSender write error", "error", err.Error())
 				return
 			}
 		}

@@ -2,8 +2,6 @@ package db
 
 import (
 	"context"
-	"log/slog"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -13,12 +11,6 @@ import (
 type postgres struct {
 	pool *pgxpool.Pool
 }
-
-var (
-	logger slog.Logger
-	pg     *postgres
-	pgOnce sync.Once
-)
 
 // Begin wraps the pgxpool.Pool's Begin method.
 func (pg *postgres) Begin(ctx context.Context) (pgx.Tx, error) {

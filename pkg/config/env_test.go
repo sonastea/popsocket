@@ -7,8 +7,8 @@ import (
 )
 
 type testcase struct {
-	name        string
 	envVars     map[string]string
+	name        string
 	shouldPanic bool
 }
 

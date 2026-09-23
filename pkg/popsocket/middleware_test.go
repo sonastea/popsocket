@@ -2,7 +2,7 @@ package popsocket
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,7 +87,7 @@ func TestValidateCookie(t *testing.T) {
 				if discordID == expectedDiscordID {
 					return expectedUserID, nil
 				}
-				return 0, fmt.Errorf(SESSION_UNAUTHORIZED)
+				return 0, errors.New(SESSION_UNAUTHORIZED)
 			},
 		}
 		sm := NewSessionMiddleware(mockStore)
@@ -143,7 +143,7 @@ func TestValidateCookie(t *testing.T) {
 	t.Run("Invalid Session ID", func(t *testing.T) {
 		mockStore := &MockSessionStore{
 			FindFunc: func(ctx context.Context, sid string) (Session, error) {
-				return Session{SID: "invalid-sid"}, fmt.Errorf(SESSION_ERROR)
+				return Session{SID: "invalid-sid"}, errors.New(SESSION_ERROR)
 			},
 		}
 		sm := NewSessionMiddleware(mockStore)

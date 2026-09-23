@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"reflect"
@@ -87,16 +88,15 @@ func TestLoggingFunctions(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
 		log      func(msg string, args ...any)
+		name     string
 		logLevel slog.Level
 	}{
-		{"LogDebug", ps.LogDebug, slog.LevelDebug},
-		{"LogInfo", ps.LogInfo, slog.LevelInfo},
-		{"LogError", ps.LogError, slog.LevelError},
-		{"LogWarn", ps.LogWarn, slog.LevelWarn},
+		{name: "LogDebug", log: ps.LogDebug, logLevel: slog.LevelDebug},
+		{name: "LogInfo", log: ps.LogInfo, logLevel: slog.LevelInfo},
+		{name: "LogError", log: ps.LogError, logLevel: slog.LevelError},
+		{name: "LogWarn", log: ps.LogWarn, logLevel: slog.LevelWarn},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var (
@@ -169,7 +169,7 @@ func TestNew_Options(t *testing.T) {
 		t.Fatalf("Expected new valkey client, got %s", err)
 	}
 
-	errMsg := fmt.Sprintf("mock option error")
+	errMsg := "mock option error"
 	optionsWithError := func(ps *PopSocket) error {
 		return errors.New(errMsg)
 	}
@@ -214,13 +214,23 @@ func TestServeWs(t *testing.T) {
 		t.Fatalf("Expected new valkey client, got %s", err)
 	}
 
+	// Reserve an ephemeral port instead of a fixed one (e.g. :8080) so the
+	// test server can't collide with an unrelated server already listening
+	// on that port, which would hijack the WebSocket handshake.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Unable to reserve an ephemeral port: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
 	customMux := http.NewServeMux()
-	ps, err := New(vk, WithAddress(":8080"), WithServeMux(customMux))
+	ps, err := New(vk, WithAddress(addr), WithServeMux(customMux))
 	if err != nil {
 		t.Fatalf("New PopSocket failed: %v", err)
 	}
 
-	wsUrl := "ws://localhost:8080"
+	wsUrl := "ws://" + addr
 	customMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		serveWs(ps, w, r)
 	})
@@ -235,6 +245,19 @@ func TestServeWs(t *testing.T) {
 			t.Error("Unable to start PopSocket server.")
 		}
 	}()
+
+	// Wait for the server to start listening before dialing.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PopSocket server never started listening on %s", addr)
+		}
+	}
 
 	header := http.Header{}
 	header.Add("Cookie", fmt.Sprintf("connect.sid=%s", cookie))
@@ -255,6 +278,10 @@ func TestServeWs(t *testing.T) {
 
 	psMessage := ipc.EventMessage{Event: ipc.EventType_CONNECT}
 	m, err := proto.Marshal(&psMessage)
+	if err != nil {
+		t.Fatalf("Failed to marshal message: %v", err)
+	}
+
 	err = conn.Write(ctx, websocket.MessageBinary, m)
 	if err != nil {
 		t.Fatalf("Failed to send message to server: %v", err)

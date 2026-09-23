@@ -1,0 +1,42 @@
+# golangci-lint configuration (v2 format).
+#
+# Run locally with:
+#   golangci-lint run
+# or via the Makefile:
+#   make lint
+#
+# The "standard" set is errcheck, govet, ineffassign, staticcheck, unused.
+# Anything enabled below is additive, so adding/removing a linter is a
+# one-line change.
+
+version: "2"
+
+linters:
+  default: standard
+
+  enable:
+    # Suggests preallocating slices when appending in a loop with a known
+    # or inferable length (goperf.dev memory preallocation pattern).
+    - prealloc
+
+  settings:
+    govet:
+      enable:
+        # Flags structs whose field order wastes bytes on padding
+        # (goperf.dev struct field alignment pattern).
+        - fieldalignment
+
+  exclusions:
+    rules:
+      # Ignoring errors from cleanup calls (Close, os.Setenv, ...) inside
+      # tests is fine; they would only shadow the actual failure.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+# Notes:
+# - Formatting stays with gofumpt (see the format job in CI / make tidy) so
+#   golangci-lint runs linters only.
+# - Keep the pinned versions in sync with:
+#   - .github/workflows/ci.yml (golangci-lint-action "version" input)
+#   - Makefile (GOLANGCI_LINT_VERSION)

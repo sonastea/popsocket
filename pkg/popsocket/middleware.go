@@ -2,7 +2,7 @@ package popsocket
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"net/http"
 
 	"github.com/sonastea/popsocket/pkg/config"
@@ -79,7 +79,7 @@ func (sm *SessionMiddleware) bindToContext(ctx context.Context, session Session,
 func (sm *SessionMiddleware) checkCookiePresence(r *http.Request) (string, error) {
 	cookie, err := r.Cookie("connect.sid")
 	if err != nil || cookie.Value == "" {
-		return "", fmt.Errorf(SESSION_MISSING_COOKIE)
+		return "", errors.New(SESSION_MISSING_COOKIE)
 	}
 
 	return cookie.Value, nil
@@ -89,7 +89,7 @@ func (sm *SessionMiddleware) checkCookiePresence(r *http.Request) (string, error
 func (sm *SessionMiddleware) extractSessionID(cookie string) (string, error) {
 	sid, err := util.DecodeCookie(cookie, config.ENV.SESSION_SECRET_KEY.Value)
 	if err != nil {
-		return "", fmt.Errorf(SESSION_UNAUTHORIZED)
+		return "", errors.New(SESSION_UNAUTHORIZED)
 	}
 
 	return sid, nil

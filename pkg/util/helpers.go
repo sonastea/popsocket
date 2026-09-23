@@ -27,11 +27,7 @@ func CalculateHMAC(value, secret, sig string) bool {
 	expected = UrlToStandardBase64(expected)
 	sig = UrlToStandardBase64(sig)
 
-	if hmac.Equal([]byte(expected), []byte(sig)) {
-		return true
-	}
-
-	return false
+	return hmac.Equal([]byte(expected), []byte(sig))
 }
 
 // DecodeCookie decodes the URL-encoded cookie value and verifies its HMAC signature.
@@ -39,7 +35,7 @@ func CalculateHMAC(value, secret, sig string) bool {
 func DecodeCookie(str string, secret string) (string, error) {
 	decodedValue, err := url.QueryUnescape(str)
 	if err != nil {
-		return "", fmt.Errorf("Unable to URL-decode cookie value: %w", err)
+		return "", fmt.Errorf("unable to URL-decode cookie value: %w", err)
 	}
 
 	if !strings.HasPrefix(decodedValue, "s:") {
@@ -50,14 +46,14 @@ func DecodeCookie(str string, secret string) (string, error) {
 
 	parts := strings.SplitN(signedValue, ".", 2)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("Invalid signed cookie format")
+		return "", fmt.Errorf("invalid signed cookie format")
 	}
 
 	originalSID := parts[0]
 	signature := parts[1]
 
 	if ok := CalculateHMAC(originalSID, secret, signature); !ok {
-		return "", fmt.Errorf("Unable to calculate HMAC: %w", err)
+		return "", fmt.Errorf("unable to calculate HMAC: %w", err)
 	}
 
 	return originalSID, nil

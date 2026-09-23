@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,8 +22,8 @@ type sessionStore struct {
 }
 
 type User struct {
-	ID        int32   `json:"id,omitempty"`
 	DiscordID *string `json:"discordId,omitempty"`
+	ID        int32   `json:"id,omitempty"`
 }
 
 type Passport struct {
@@ -34,16 +35,16 @@ type SessionData struct {
 }
 
 type Session struct {
-	SID       string      `json:"sid"`
 	ExpiresAt time.Time   `json:"expiresAt"`
 	Data      SessionData `json:"data"`
+	SID       string      `json:"sid"`
 }
 
 const (
-	SESSION_EXPIRED        = "Session has expired. Please log in again."
-	SESSION_ERROR          = "Unexpected error with your session. Please log in again."
-	SESSION_UNAUTHORIZED   = "Unauthorized: Missing or invalid session."
-	SESSION_MISSING_COOKIE = "Missing session cookie in request headers."
+	SESSION_EXPIRED        = "session has expired, please log in again"
+	SESSION_ERROR          = "unexpected error with your session, please log in again"
+	SESSION_UNAUTHORIZED   = "unauthorized: missing or invalid session"
+	SESSION_MISSING_COOKIE = "missing session cookie in request headers"
 )
 
 // NewSessionStore creates a new instance of sessionStore.
@@ -65,13 +66,13 @@ func (ss *sessionStore) Find(ctx context.Context, sid string) (Session, error) {
 	}
 
 	if time.Now().After(session.ExpiresAt) {
-		return Session{}, fmt.Errorf(SESSION_EXPIRED)
+		return Session{}, errors.New(SESSION_EXPIRED)
 	}
 
 	err = json.Unmarshal(jsonData, &session.Data)
 	if err != nil {
 		Logger().Error(fmt.Sprintf("SessionStore.Find Unmarshal Error: %s", err.Error()))
-		return Session{}, fmt.Errorf(SESSION_ERROR)
+		return Session{}, errors.New(SESSION_ERROR)
 	}
 
 	return session, nil
@@ -104,7 +105,7 @@ func (ss *sessionStore) UserFromDiscordID(ctx context.Context, discordID string)
 
 	err := ss.db.QueryRow(ctx, query, discordID).Scan(&userID)
 	if err != nil {
-		return 0, fmt.Errorf(SESSION_UNAUTHORIZED)
+		return 0, errors.New(SESSION_UNAUTHORIZED)
 	}
 
 	return userID, nil

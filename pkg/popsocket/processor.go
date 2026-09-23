@@ -2,13 +2,22 @@ package popsocket
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"google.golang.org/protobuf/proto"
 )
+
+// eventMessagePool reuses EventMessage probes across parseMessage calls to
+// reduce per-message allocations and GC pressure on the hot read path.
+var eventMessagePool = sync.Pool{
+	New: func() any { return new(ipc.EventMessage) },
+}
 
 type MessageType int
 
@@ -17,12 +26,12 @@ const (
 	RegularMessageType
 )
 
-const ParseEventMessageError = "Failed to parse message as EventMessage or RegularMessage"
+const ParseEventMessageError = "failed to parse message as EventMessage or RegularMessage"
 
 type ParsedMessage struct {
-	Type         MessageType
 	EventMessage *ipc.EventMessage
 	Message      *ipc.Message
+	Type         MessageType
 }
 
 // handleMessages is the central hub that parses the received message
@@ -37,6 +46,7 @@ func (p *PopSocket) handleMessages(ctx context.Context, client client, recv []by
 	switch parsed.Type {
 	case EventMessageType:
 		p.processEventMessage(ctx, client, parsed.EventMessage)
+		eventMessagePool.Put(parsed.EventMessage)
 	case RegularMessageType:
 		p.handleRegularMessage(ctx, parsed)
 	}
@@ -60,7 +70,8 @@ func (p *PopSocket) handleRegularMessage(ctx context.Context, parsed *ParsedMess
 }
 
 func parseMessage(recv []byte) (*ParsedMessage, error) {
-	eventMsg := &ipc.EventMessage{}
+	eventMsg := eventMessagePool.Get().(*ipc.EventMessage)
+	eventMsg.Reset()
 	if err := proto.Unmarshal(recv, eventMsg); err == nil {
 		if eventMsg.Event != ipc.EventType_UNKNOWN_TYPE {
 			return &ParsedMessage{
@@ -69,6 +80,8 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 			}, nil
 		}
 	}
+	// Not an event message; recycle the probe for the next caller.
+	eventMessagePool.Put(eventMsg)
 
 	regularMsg := &ipc.Message{}
 	if err := proto.Unmarshal(recv, regularMsg); err == nil {
@@ -78,7 +91,7 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 		}, nil
 	}
 
-	return nil, fmt.Errorf(ParseEventMessageError)
+	return nil, errors.New(ParseEventMessageError)
 }
 
 // sanitizeCreatedAt ensures regular messages have a reliable and nonspoofed timestamp.
@@ -147,7 +160,7 @@ func (p *PopSocket) processRegularMessage(send []byte, m *ipc.Message) {
 // writeEventMessage is a helper function to send an EventMessage to the given user.
 func (p *PopSocket) writeEventMessage(client client, msg *ipc.EventMessage) error {
 	if msg == nil {
-		return fmt.Errorf("Marshal error: msg passed is nil")
+		return fmt.Errorf("marshal error: msg passed is nil")
 	}
 
 	encoded, _ := proto.Marshal(msg)
@@ -161,7 +174,7 @@ func (p *PopSocket) connect(client client) {
 	message := &ipc.EventMessage{
 		Event: ipc.EventType_CONNECT,
 		Content: &ipc.EventMessage_RespConnect{RespConnect: &ipc.ContentConnectResponse{
-			Content: fmt.Sprintf(`{"id": %d}`, client.ID()),
+			Content: `{"id": ` + strconv.Itoa(int(client.ID())) + `}`,
 		}},
 	}
 
@@ -191,13 +204,19 @@ func (p *PopSocket) conversations(ctx context.Context, client client) {
 	}
 }
 
+// convosKey builds the cache key for a user's convos payload
+// ("convos:<id>") without going through fmt.Sprintf's reflection.
+func convosKey(userID int32) string {
+	return "convos:" + strconv.FormatInt(int64(userID), 10)
+}
+
 // delConvosCache is a helper function that removes the convo:key between two
 // users to avoid retrieving stale convos when processing regular messages.
 func (p *PopSocket) delConvosCache(ctx context.Context, to_id int32, from_id int32) {
 	p.Valkey.DoMulti(
 		ctx,
-		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", to_id)).Build(),
-		p.Valkey.B().Del().Key(fmt.Sprintf("convos:%d", from_id)).Build(),
+		p.Valkey.B().Del().Key(convosKey(to_id)).Build(),
+		p.Valkey.B().Del().Key(convosKey(from_id)).Build(),
 	)
 }
 

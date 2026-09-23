@@ -19,7 +19,7 @@ func createRandomSecretKey() (string, error) {
 	randomBytes := make([]byte, 32)
 	_, err := rand.Read(randomBytes)
 	if err != nil {
-		return "", fmt.Errorf("Unable to generate random secret key: %w", err)
+		return "", fmt.Errorf("unable to generate random secret key: %w", err)
 	}
 	return hex.EncodeToString(randomBytes), nil
 }
@@ -46,7 +46,9 @@ func SetRandomTestSecretKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	os.Setenv("SESSION_SECRET_KEY", secretKey)
+	if err := os.Setenv("SESSION_SECRET_KEY", secretKey); err != nil {
+		return "", err
+	}
 	// we have to reload environment variables into the config package
 	config.LoadEnvVars()
 	return secretKey, nil

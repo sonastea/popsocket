@@ -22,7 +22,7 @@ type DB interface {
 func NewPostgres(ctx context.Context, connString string) (DB, error) {
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to create connection pool: %s", err)
+		return nil, fmt.Errorf("unable to create connection pool: %s", err)
 	}
 
 	return &postgres{pool: pool}, nil

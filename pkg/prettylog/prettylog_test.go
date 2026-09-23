@@ -1,6 +1,7 @@
 package prettylog
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"strings"
@@ -8,13 +9,13 @@ import (
 )
 
 type newHandlerTestCase struct {
-	name                     string
-	handlerOptions           *slog.HandlerOptions
-	options                  []Option
 	expectedWriter           any
-	expectedColor            bool
-	expectedLevel            slog.Level
+	handlerOptions           *slog.HandlerOptions
 	expectedReplace          func(groups []string, a slog.Attr) slog.Attr
+	name                     string
+	options                  []Option
+	expectedLevel            slog.Level
+	expectedColor            bool
 	expectedOutputEmptyAttrs bool
 }
 
@@ -81,7 +82,7 @@ func TestNew(t *testing.T) {
 				t.Errorf("Expected colorize to be %v, got %v", tt.expectedColor, handler.colorize)
 			}
 
-			if !handler.handler.Enabled(nil, tt.expectedLevel) {
+			if !handler.handler.Enabled(context.TODO(), tt.expectedLevel) {
 				t.Errorf("Expected handler to be enabled for level %v, but it was not", tt.expectedLevel)
 			}
 

@@ -141,18 +141,14 @@ func TestProcessRegularMessage(t *testing.T) {
 
 		p.processRegularMessage(send, m)
 
-		select {
-		case msg := <-receiver.Send():
-			if !bytes.Equal(msg, send) {
-				t.Fatal("[Receiver] Expected receiver client to get message")
-			}
+		msg := <-receiver.Send()
+		if !bytes.Equal(msg, send) {
+			t.Fatal("[Receiver] Expected receiver client to get message")
 		}
 
-		select {
-		case msg := <-sender.Send():
-			if !bytes.Equal(msg, send) {
-				t.Fatal("[Sender] Expected sender client to get message")
-			}
+		msg = <-sender.Send()
+		if !bytes.Equal(msg, send) {
+			t.Fatal("[Sender] Expected sender client to get message")
 		}
 	})
 

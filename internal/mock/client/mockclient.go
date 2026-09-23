@@ -5,9 +5,9 @@ import "github.com/coder/websocket"
 type mockClient struct {
 	conn      *websocket.Conn
 	send      chan []byte
-	connID    string
-	UserID    int32   `json:"userId,omitempty"`
 	DiscordID *string `json:"discordId,omitempty"`
+	connID    string
+	UserID    int32 `json:"userId,omitempty"`
 }
 
 func New(conn_id string, user_id int32, discord_id string) *mockClient {

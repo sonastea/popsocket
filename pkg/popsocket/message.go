@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -84,7 +83,7 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 
 	rows, err := ms.db.Query(ctx, query, user_id)
 	if err != nil {
-		return nil, fmt.Errorf("Error querying conversations: %w", err)
+		return nil, fmt.Errorf("querying conversations: %w", err)
 	}
 	defer rows.Close()
 
@@ -111,12 +110,12 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 			&msg.Read,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("Error scanning row: %w", err)
+			return nil, fmt.Errorf("scanning row: %w", err)
 		}
 
 		existingConv, exists := conversationsMap[conv.Convid]
 		if !exists {
-			conv.Messages = []*ipc.Message{}
+			conv.Messages = make([]*ipc.Message, 0, 8)
 			conv.Unread = 0
 			conversationsMap[conv.Convid] = &conv
 			existingConv = &conv
@@ -137,7 +136,7 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("Error iterating conversation rows: %w", err)
+		return nil, fmt.Errorf("iterating conversation rows: %w", err)
 	}
 
 	selfQuery := `
@@ -154,7 +153,7 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 
 	selfRows, err := ms.db.Query(ctx, selfQuery, user_id)
 	if err != nil {
-		return nil, fmt.Errorf("Error querying self conversation: %w", err)
+		return nil, fmt.Errorf("querying self conversation: %w", err)
 	}
 	defer selfRows.Close()
 
@@ -178,12 +177,12 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 			&msg.Read,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("Error scanning self conversation row: %w", err)
+			return nil, fmt.Errorf("scanning self conversation row: %w", err)
 		}
 
 		existingConv, exists := conversationsMap[conv.Convid]
 		if !exists {
-			conv.Messages = []*ipc.Message{}
+			conv.Messages = make([]*ipc.Message, 0, 8)
 			conv.Unread = 0
 			conversationsMap[conv.Convid] = &conv
 			existingConv = &conv
@@ -206,8 +205,8 @@ func (ms *messageStore) Convos(ctx context.Context, user_id int32) (*ipc.Content
 
 	for _, conv := range conversationsMap {
 		result.Conversations = append(result.Conversations, conv)
-		ms.saveConversationSession(conv.Id)
 	}
+	ms.saveConversationSessions(ctx, conversationsMap)
 	ms.convosToCache(ctx, result, user_id)
 
 	return result, nil
@@ -221,7 +220,7 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	err = tx.QueryRow(ctx, `INSERT INTO "Conversation" (convid) VALUES ($1)
 		ON CONFLICT (convid) DO NOTHING
@@ -306,10 +305,9 @@ func (ms *messageStore) UpdateAsRead(ctx context.Context, msg *ipc.ContentMarkAs
 
 // convosInCache retrieves convos in the cache and returns nil on a cache miss.
 func (ms *messageStore) convosInCache(ctx context.Context, user_id int32) (*ipc.ContentConversationsResponse, error) {
-	k := fmt.Sprintf("convos:%d", user_id)
-	bd, err := ms.cache.Do(ctx, ms.cache.B().Get().Key(k).Build()).AsBytes()
+	bd, err := ms.cache.Do(ctx, ms.cache.B().Get().Key(convosKey(user_id)).Build()).AsBytes()
 	if err != nil {
-		if strings.Contains(err.Error(), "valkey nil message") {
+		if valkey.IsValkeyNil(err) {
 			return nil, nil
 		}
 		Logger().Error(fmt.Sprintf("Error retrieving convos in cache: %v", err))
@@ -318,19 +316,29 @@ func (ms *messageStore) convosInCache(ctx context.Context, user_id int32) (*ipc.
 	res := &ipc.ContentConversationsResponse{}
 	err = proto.Unmarshal(bd, res)
 	if err != nil {
-		return nil, errors.New("Error unmarshalling convos from cache")
+		return nil, errors.New("error unmarshalling convos from cache")
 	}
 
 	return res, nil
 }
 
-// saveConversationSession saves user id as a hashed key to the cache.
+// saveConversationSessions saves each conversation's user id as a hashed key
+// to the cache, batched into a single DoMulti round trip instead of one
+// command per conversation.
 // This is a leftover implementation from the nestjs implementation.
-func (ms *messageStore) saveConversationSession(clientId int32) {
-	ms.cache.Do(
-		context.Background(),
-		ms.cache.B().Hset().Key(fmt.Sprintf("convosession:%d", clientId)).FieldValue().FieldValue("id", strconv.FormatInt(int64(clientId), 10)).Build(),
-	)
+func (ms *messageStore) saveConversationSessions(ctx context.Context, conversations map[string]*ipc.Conversation) {
+	if len(conversations) == 0 {
+		return
+	}
+
+	cmds := make([]valkey.Completed, 0, len(conversations))
+	for _, conv := range conversations {
+		cmds = append(cmds, ms.cache.B().Hset().
+			Key("convosession:"+strconv.FormatInt(int64(conv.Id), 10)).
+			FieldValue().FieldValue("id", strconv.FormatInt(int64(conv.Id), 10)).
+			Build())
+	}
+	ms.cache.DoMulti(ctx, cmds...)
 }
 
 // convosToCache saves the response from `Convos` to the cache for faster retrieval.
@@ -338,7 +346,7 @@ func (ms *messageStore) convosToCache(ctx context.Context, convosResp *ipc.Conte
 	bd, _ := proto.Marshal(convosResp)
 	ms.cache.Do(
 		ctx,
-		ms.cache.B().Set().Key(fmt.Sprintf("convos:%d", user_id)).Value(string(bd)).Build(),
+		ms.cache.B().Set().Key(convosKey(user_id)).Value(string(bd)).Build(),
 	)
 }
 

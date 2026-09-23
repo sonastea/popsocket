@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,16 +20,6 @@ import (
 )
 
 const (
-
-	// Time allowed to write a message to the client.
-	writeWait = 10 * time.Second
-
-	// Time allowed to read the next response from the client.
-	readWait = 60 * time.Second
-
-	// Time allowed for client to respond to the websocket.Conn.Ping(). Must be less than readWait
-	heartbeatPeriod = (readWait * 9) / 10
-
 	// Maximum message size allowed from client.
 	MaxMessageSize = int64(1024)
 
@@ -62,18 +53,17 @@ type PopSocketInterface interface {
 }
 
 type PopSocket struct {
-	httpServer *http.Server
-	logger     *slog.Logger
-	mu         sync.RWMutex
-	Valkey     valkey.Client
-
-	broadcast  chan []byte
-	clients    map[int32]map[string]client
-	register   chan *Client
-	unregister chan *Client
-
+	Valkey valkey.Client
 	MessageService
 	SessionMiddleware
+	httpServer  *http.Server
+	logger      *slog.Logger
+	broadcast   chan []byte
+	clients     map[int32]map[string]client
+	register    chan *Client
+	unregister  chan *Client
+	clientCount atomic.Int64
+	mu          sync.RWMutex
 }
 
 // init loads the app's environment variables and default
@@ -203,7 +193,7 @@ func (p *PopSocket) Start(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		p.logger.Info(fmt.Sprintf("Shutting down PopSocket server..."))
+		p.logger.Info("Shutting down PopSocket server...")
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		return p.httpServer.Shutdown(shutdownCtx)
@@ -234,10 +224,10 @@ func (p *PopSocket) LogWarn(msg string, args ...any) {
 }
 
 // totalClients returns the total number of connected clients including own multiple web connections.
+// It reads an atomic counter maintained on register/unregister so the hot
+// connection paths don't contend on mu just to log a count.
 func (p *PopSocket) totalClients() int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return len(p.clients)
+	return int(p.clientCount.Load())
 }
 
 // manageConnections listens for client register/unregister events,
@@ -248,30 +238,34 @@ func (p *PopSocket) manageConnections(ctx context.Context) {
 		case <-ctx.Done():
 			return
 
-		case _ = <-p.broadcast:
+		case <-p.broadcast:
 
 		case c := <-p.register:
 			p.mu.Lock()
 			if p.clients[c.ID()] == nil {
 				p.clients[c.ID()] = make(map[string]client)
+				p.clientCount.Add(1)
 			}
 			p.clients[c.ID()][c.ConnID()] = c
 			p.mu.Unlock()
-			p.LogInfo(fmt.Sprintf("Joined size of connection pool: %v", p.totalClients()))
+			p.LogInfo("Joined connection pool", "size", p.totalClients())
 
 		case c := <-p.unregister:
-			if _, ok := p.clients[c.ID()][c.ConnID()]; ok {
-				p.mu.Lock()
-				close(c.send)
-				if conns, ok := p.clients[c.ID()]; ok {
+			p.mu.Lock()
+			if conns, ok := p.clients[c.ID()]; ok {
+				if _, ok := conns[c.ConnID()]; ok {
+					close(c.send)
 					delete(conns, c.ConnID())
 					if len(conns) == 0 {
 						delete(p.clients, c.ID())
+						p.clientCount.Add(-1)
 					}
+					p.mu.Unlock()
+					p.LogInfo("Left connection pool", "size", p.totalClients())
+					continue
 				}
-				p.mu.Unlock()
-				p.LogInfo(fmt.Sprintf("Left size of connection pool: %v", p.totalClients()))
 			}
+			p.mu.Unlock()
 
 		}
 	}
@@ -320,7 +314,7 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 			// Manually ping the client.
 			if err := client.conn.Ping(ctx); err != nil {
 				p.LogInfo(fmt.Sprintf("[%s] ping error: %+v \n", time.Now().Local(), err))
-				client.conn.Close(websocket.StatusPolicyViolation, "Pong not received.")
+				_ = client.conn.Close(websocket.StatusPolicyViolation, "Pong not received.")
 				return
 			}
 
@@ -330,12 +324,14 @@ func (p *PopSocket) heartbeat(ctx context.Context, client *Client, period time.D
 				return
 			}
 			if expired {
-				p.LogInfo(fmt.Sprintf("Session expired for clientID %d, connID %s.", client.ID(), client.ConnID()))
-				cancel(errors.New("Session expired."))
+				p.LogInfo("Session expired", "clientID", client.ID(), "connID", client.ConnID())
+				cancel(errors.New("session expired"))
 				return
 			}
 
-			p.LogDebug(fmt.Sprintf("Sent heartbeat to userID %d, connID %s", client.ID(), client.ConnID()))
+			// Structured args instead of fmt.Sprintf so nothing is formatted
+			// when the debug level is disabled.
+			p.LogDebug("Sent heartbeat", "userID", client.ID(), "connID", client.ConnID())
 			ticker.Reset(period)
 		}
 	}
