@@ -224,7 +224,12 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 		ON CONFLICT (convid) DO NOTHING
 		RETURNING id
 		`, msg.Convid).Scan(&convid)
-	if err != nil && !db.IsNoRows(err) {
+	if db.IsNoRows(err) {
+		// A conflicting INSERT returns no row. Resolve the ID in a separate
+		// statement so READ COMMITTED also sees a concurrent creator's commit.
+		err = tx.QueryRow(ctx, `SELECT id FROM "Conversation" WHERE convid = $1`, msg.Convid).Scan(&convid)
+	}
+	if err != nil {
 		return nil, err
 	}
 
@@ -232,19 +237,7 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 		ON CONFLICT DO NOTHING
 		`, convid, msg.From, msg.To)
 	if err != nil {
-		if !db.IsForeignKeyViolation(err) {
-			return nil, err
-		}
-
-		err = tx.Rollback(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		tx, err = ms.db.Begin(ctx)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	_, err = tx.Exec(ctx, `

@@ -59,9 +59,25 @@ jobs:
     runs-on: ubuntu-latest
     needs: format
 
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: popsocket_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d popsocket_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/test_db?sslmode=disable' }}
       SESSION_SECRET_KEY: ${{ secrets.SESSION_SECRET_KEY || 'test_secret_session_key_32_chars' }}
+      POPSOCKET_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/popsocket_test?sslmode=disable
 
     steps:
       - name: Checkout
