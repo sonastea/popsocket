@@ -66,10 +66,8 @@ type PopSocket struct {
 	mu          sync.RWMutex
 }
 
-// init loads the app's environment variables and default
-// allowed origins for the websocket connections.
+// init loads the default allowed origins for websocket connections.
 func init() {
-	config.LoadEnvVars()
 	loadAllowedOrigins()
 }
 
@@ -88,6 +86,10 @@ func loadAllowedOrigins() {
 
 // New initializes a new PopSocket with optional configurations.
 func New(valkey valkey.Client, opts ...option) (*PopSocket, error) {
+	if err := config.LoadEnvVars(); err != nil {
+		return nil, fmt.Errorf("failed to load PopSocket configuration: %w", err)
+	}
+
 	ps := &PopSocket{
 		broadcast:  make(chan []byte, MaxMessageSize),
 		clients:    make(map[int32]map[string]client),

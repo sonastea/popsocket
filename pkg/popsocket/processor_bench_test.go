@@ -1,6 +1,7 @@
 package popsocket
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func recycleParsed(parsed *ParsedMessage) {
 func BenchmarkParseMessageEvent(b *testing.B) {
 	send := benchEventMessage(b)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		parsed, err := parseMessage(send)
 		if err != nil {
 			b.Fatalf("Failed to parse event message: %s", err)
@@ -71,7 +72,29 @@ func BenchmarkParseMessageEvent(b *testing.B) {
 func BenchmarkParseMessageRegular(b *testing.B) {
 	send := benchRegularMessage(b)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
+		parsed, err := parseMessage(send)
+		if err != nil {
+			b.Fatalf("Failed to parse regular message: %s", err)
+		}
+		recycleParsed(parsed)
+	}
+}
+
+func BenchmarkParseMessageRegularLarge(b *testing.B) {
+	content := strings.Repeat("lorem ipsum ", 75)
+	send, err := proto.Marshal(&ipc.Message{
+		Convid:    "foo-bar",
+		To:        9,
+		From:      324,
+		Content:   &content,
+		CreatedAt: "2026-09-30T12:00:00Z",
+	})
+	if err != nil {
+		b.Fatalf("Failed to marshal regular message: %s", err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
 		parsed, err := parseMessage(send)
 		if err != nil {
 			b.Fatalf("Failed to parse regular message: %s", err)

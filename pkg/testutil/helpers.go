@@ -50,6 +50,8 @@ func SetRandomTestSecretKey() (string, error) {
 		return "", err
 	}
 	// we have to reload environment variables into the config package
-	config.LoadEnvVars()
+	if err := config.LoadEnvVars(); err != nil {
+		return "", err
+	}
 	return secretKey, nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -70,18 +71,20 @@ func (p *PopSocket) handleRegularMessage(ctx context.Context, parsed *ParsedMess
 }
 
 func parseMessage(recv []byte) (*ParsedMessage, error) {
-	eventMsg := eventMessagePool.Get().(*ipc.EventMessage)
-	eventMsg.Reset()
-	if err := proto.Unmarshal(recv, eventMsg); err == nil {
-		if eventMsg.Event != ipc.EventType_UNKNOWN_TYPE {
-			return &ParsedMessage{
-				Type:         EventMessageType,
-				EventMessage: eventMsg,
-			}, nil
+	if hasEventField(recv) {
+		eventMsg := eventMessagePool.Get().(*ipc.EventMessage)
+		eventMsg.Reset()
+		if err := proto.Unmarshal(recv, eventMsg); err == nil {
+			if eventMsg.Event != ipc.EventType_UNKNOWN_TYPE {
+				return &ParsedMessage{
+					Type:         EventMessageType,
+					EventMessage: eventMsg,
+				}, nil
+			}
 		}
+		// Not an event message; recycle the probe for the next caller.
+		eventMessagePool.Put(eventMsg)
 	}
-	// Not an event message; recycle the probe for the next caller.
-	eventMessagePool.Put(eventMsg)
 
 	regularMsg := &ipc.Message{}
 	if err := proto.Unmarshal(recv, regularMsg); err == nil {
@@ -92,6 +95,28 @@ func parseMessage(recv []byte) (*ParsedMessage, error) {
 	}
 
 	return nil, errors.New(ParseEventMessageError)
+}
+
+// hasEventField checks for EventMessage's field 1 varint without allocating
+// nested messages. Message uses a string for field 1, and protobuf fields can
+// arrive in any order. The selected decoder still validates the full message.
+func hasEventField(recv []byte) bool {
+	for len(recv) > 0 {
+		num, typ, n := protowire.ConsumeTag(recv)
+		if n < 0 {
+			return false
+		}
+		if num == 1 && typ == protowire.VarintType {
+			return true
+		}
+		recv = recv[n:]
+		n = protowire.ConsumeFieldValue(num, typ, recv)
+		if n < 0 {
+			return false
+		}
+		recv = recv[n:]
+	}
+	return false
 }
 
 // sanitizeCreatedAt ensures regular messages have a reliable and nonspoofed timestamp.

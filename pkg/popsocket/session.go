@@ -2,7 +2,6 @@ package popsocket
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,11 +55,16 @@ func NewSessionStore(db db.DB) *sessionStore {
 // the context with the client's userIDKey and discordIDKey.
 func (ss *sessionStore) Find(ctx context.Context, sid string) (Session, error) {
 	var session Session
-	var jsonData json.RawMessage
+	var jsonData []byte
 
 	query := `SELECT s.sid, s.data, s."expiresAt" FROM "Session" s WHERE s.sid = $1`
 	err := ss.db.QueryRow(ctx, query, sid).Scan(&session.SID, &jsonData, &session.ExpiresAt)
 	if err != nil {
+		if db.IsNoRows(err) {
+			// A missing session is expected for stale or invalid cookies,
+			// not a server fault worth logging at error level.
+			return Session{}, errors.New(SESSION_UNAUTHORIZED)
+		}
 		Logger().Error(fmt.Sprintf("%+v", err))
 		return Session{}, err
 	}
@@ -86,7 +90,7 @@ func (ss *sessionStore) HasExpired(ctx context.Context, sid string) (bool, error
 	query := `SELECT s."expiresAt" FROM "Session" s WHERE s.sid = $1`
 	err := ss.db.QueryRow(ctx, query, sid).Scan(&expiresAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if db.IsNoRows(err) {
 			return true, nil // Consider missing session as expired.
 		}
 		Logger().Debug(fmt.Sprintf("%+v", err))

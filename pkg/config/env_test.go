@@ -2,18 +2,23 @@ package config
 
 import (
 	"os"
-	"reflect"
+	"strings"
 	"testing"
 )
 
 type testcase struct {
-	envVars     map[string]string
-	name        string
-	shouldPanic bool
+	envVars             map[string]string
+	name                string
+	expectedDatabaseURL string
+	missingVariable     string
 }
 
-// TestLoadEnvVars ensures proper env vars are loaded and panics when not set.
+// TestLoadEnvVars ensures required variables are loaded and missing or empty
+// variables return an error.
 func TestLoadEnvVars(t *testing.T) {
+	original := ENV
+	t.Cleanup(func() { ENV = original })
+
 	tests := []testcase{
 		{
 			name: "All Environment Variables Set",
@@ -21,60 +26,69 @@ func TestLoadEnvVars(t *testing.T) {
 				"DATABASE_URL":       "postgresql://localhost:5432/db",
 				"SESSION_SECRET_KEY": "test-key",
 			},
-			shouldPanic: false,
+			expectedDatabaseURL: "postgresql://localhost:5432/db",
 		},
 		{
-			name:        "Missing Environment Variables",
-			envVars:     map[string]string{},
-			shouldPanic: true,
+			name:            "Missing Database URL",
+			envVars:         map[string]string{"SESSION_SECRET_KEY": "test-key"},
+			missingVariable: "DATABASE_URL",
+		},
+		{
+			name:            "Empty Database URL",
+			envVars:         map[string]string{"DATABASE_URL": "", "SESSION_SECRET_KEY": "test-key"},
+			missingVariable: "DATABASE_URL",
+		},
+		{
+			name:            "Missing Environment Variables",
+			envVars:         map[string]string{},
+			missingVariable: "DATABASE_URL",
+		},
+		{
+			name:            "Missing Session Secret Key",
+			envVars:         map[string]string{"DATABASE_URL": "postgresql://localhost:5432/db"},
+			missingVariable: "SESSION_SECRET_KEY",
+		},
+		{
+			name:            "Empty Session Secret Key",
+			envVars:         map[string]string{"DATABASE_URL": "postgresql://localhost:5432/db", "SESSION_SECRET_KEY": ""},
+			missingVariable: "SESSION_SECRET_KEY",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv("DATABASE_URL")
-			os.Unsetenv("SESSION_SECRET_KEY")
-
-			for key, value := range tt.envVars {
-				os.Setenv(key, value)
-			}
-
-			defer func() {
-				for key := range tt.envVars {
-					os.Unsetenv(key)
-				}
-			}()
-
-			didPanic := false
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						didPanic = true
-					}
-				}()
-				LoadEnvVars()
-			}()
-
-			if tt.shouldPanic && !didPanic {
-				t.Error("Expected panic but got none")
-			} else if !tt.shouldPanic && didPanic {
-				t.Error("Got unexpected panic")
-			}
-
-			if !didPanic && !tt.shouldPanic {
-				for key, value := range tt.envVars {
-					os.Setenv(key, value)
-				}
-
-				LoadEnvVars()
-				val := reflect.ValueOf(&ENV).Elem()
-				for i := 0; i < val.NumField(); i++ {
-					typeField := val.Type().Field(i)
-					envValue, exists := os.LookupEnv(typeField.Name)
-					if !exists || envValue == "" {
-						t.Fatalf("Expected environment variable %s to be set in test '%s', but it was not found", typeField.Name, tt.name)
+			for _, key := range []string{"DATABASE_URL", "SESSION_SECRET_KEY"} {
+				value, exists := tt.envVars[key]
+				t.Setenv(key, value)
+				if !exists {
+					if err := os.Unsetenv(key); err != nil {
+						t.Fatal(err)
 					}
 				}
+			}
+
+			previous := ENV
+			err := LoadEnvVars()
+			if tt.missingVariable != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.missingVariable) {
+					t.Fatalf("Expected missing %s error, got %v", tt.missingVariable, err)
+				}
+				if ENV != previous {
+					t.Fatal("Invalid configuration replaced previously loaded values")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if ENV.DATABASE_URL.Value != tt.expectedDatabaseURL {
+				t.Errorf("Expected DATABASE_URL %q, got %q", tt.expectedDatabaseURL, ENV.DATABASE_URL.Value)
+			}
+
+			wantSecret, ok := tt.envVars["SESSION_SECRET_KEY"]
+			if !ok || ENV.SESSION_SECRET_KEY.Value != wantSecret {
+				t.Errorf("Expected SESSION_SECRET_KEY %q, got %q", wantSecret, ENV.SESSION_SECRET_KEY.Value)
 			}
 		})
 	}

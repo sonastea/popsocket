@@ -72,6 +72,8 @@ func TestLoadAllowedOrigins(t *testing.T) {
 // TestLoggingFunctions calls PopSocket's methods which are wrappers
 // of slog's logging methods.
 func TestLoggingFunctions(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+	t.Setenv("SESSION_SECRET_KEY", "test-secret")
 	s := miniredis.RunT(t)
 	defer s.Close()
 
@@ -127,6 +129,8 @@ func TestLoggingFunctions(t *testing.T) {
 
 // TestNew ensures New() returns a valid PopSocket instance.
 func TestNew(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+	t.Setenv("SESSION_SECRET_KEY", "test-secret")
 	s := miniredis.RunT(t)
 	defer s.Close()
 
@@ -161,6 +165,8 @@ func TestNew(t *testing.T) {
 // TestNew_Options ensures New() can handle passed options
 // and return a valid instance of PopSocket or error.
 func TestNew_Options(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+	t.Setenv("SESSION_SECRET_KEY", "test-secret")
 	s := miniredis.RunT(t)
 	t.Setenv("REDIS_URL", s.Addr())
 
@@ -192,8 +198,24 @@ func TestNew_Options(t *testing.T) {
 	}
 }
 
+func TestNewMissingConfiguration(t *testing.T) {
+	for _, key := range []string{"DATABASE_URL", "SESSION_SECRET_KEY"} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+			t.Setenv("SESSION_SECRET_KEY", "test-secret")
+			t.Setenv(key, "")
+			ps, err := New(nil)
+			if ps != nil || err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("Expected configuration error for %s, got PopSocket=%v, err=%v", key, ps, err)
+			}
+		})
+	}
+}
+
 // TestServeWs ensures that ServeWs is upgrading a client's http connect to a websocket.
 func TestServeWs(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+	t.Setenv("SESSION_SECRET_KEY", "test-secret")
 	s := miniredis.RunT(t)
 	defer s.Close()
 
@@ -314,6 +336,8 @@ func TestServeWs(t *testing.T) {
 // TestWithOpts ensures that the PopSocket instance sets and uses
 // the passed WithXXX values.
 func TestWithOpts(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+	t.Setenv("SESSION_SECRET_KEY", "test-secret")
 	t.Run("With Address", func(t *testing.T) {
 		s := miniredis.RunT(t)
 		defer s.Close()
@@ -367,7 +391,7 @@ func TestWithOpts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Expected new valkey client, got %s", err)
 		}
-		messageStore := NewMessageStore(vk, mock_db.New())
+		messageStore := NewMessageStore(vk, mock_db.New(t))
 		messageService := NewMessageService(messageStore)
 
 		ps, err := New(vk, WithMessageService(messageService))
@@ -390,7 +414,7 @@ func TestWithOpts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Expected new valkey client, got %s", err)
 		}
-		sessionStore := NewSessionStore(mock_db.New())
+		sessionStore := NewSessionStore(mock_db.New(t))
 		sessionMiddleware := NewSessionMiddleware(sessionStore)
 
 		ps, err := New(vk, WithSessionMiddleware(sessionMiddleware))

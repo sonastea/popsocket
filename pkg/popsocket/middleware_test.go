@@ -20,7 +20,8 @@ func TestNewSessionMiddleware(t *testing.T) {
 }
 
 func TestValidateCookie(t *testing.T) {
-	t.Parallel()
+	t.Setenv("DATABASE_URL", "postgresql://localhost:5432/popsocket_test")
+	t.Setenv("SESSION_SECRET_KEY", "test-secret")
 
 	secretKey, err := testutil.SetRandomTestSecretKey()
 	if err != nil {

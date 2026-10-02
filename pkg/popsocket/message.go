@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"github.com/sonastea/popsocket/pkg/db"
 	"github.com/valkey-io/valkey-go"
@@ -226,7 +224,7 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 		ON CONFLICT (convid) DO NOTHING
 		RETURNING id
 		`, msg.Convid).Scan(&convid)
-	if err != nil && err != pgx.ErrNoRows {
+	if err != nil && !db.IsNoRows(err) {
 		return nil, err
 	}
 
@@ -234,8 +232,7 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 		ON CONFLICT DO NOTHING
 		`, convid, msg.From, msg.To)
 	if err != nil {
-		pgErr, ok := err.(*pgconn.PgError)
-		if !ok || pgErr.Code != "23503" {
+		if !db.IsForeignKeyViolation(err) {
 			return nil, err
 		}
 

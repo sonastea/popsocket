@@ -17,17 +17,18 @@ type env struct {
 
 var ENV env
 
-// LoadEnvVars populates the Env object with the required
-// environment variables to be utilized in PopSocket.
-func LoadEnvVars() {
-	val := reflect.ValueOf(&ENV).Elem()
+// LoadEnvVars populates the Env object with the required environment variables.
+// Unset or empty variables return an error without replacing previously loaded values.
+func LoadEnvVars() error {
+	var loaded env
+	val := reflect.ValueOf(&loaded).Elem()
 	for i := 0; i < val.NumField(); i++ {
 		field := val.Field(i)
 		typeField := val.Type().Field(i)
 
-		envValue, exists := os.LookupEnv(typeField.Name)
-		if !exists {
-			panic(fmt.Sprintf("Environment variable %s is required", typeField.Name))
+		envValue := os.Getenv(typeField.Name)
+		if envValue == "" {
+			return fmt.Errorf("environment variable %s is required", typeField.Name)
 		}
 
 		valueField := field.FieldByName("Value")
@@ -35,4 +36,6 @@ func LoadEnvVars() {
 			valueField.SetString(envValue)
 		}
 	}
+	ENV = loaded
+	return nil
 }
