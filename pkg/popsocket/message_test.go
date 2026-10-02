@@ -8,13 +8,13 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	mock_db "github.com/sonastea/popsocket/internal/mock/db"
 )
 
 type saveFailureTx struct {
 	pgx.Tx
 	queryRow func(...any) error
+	batchErr error
 	commit   func() error
 	rollback func() error
 }
@@ -23,19 +23,41 @@ func (tx *saveFailureTx) QueryRow(context.Context, string, ...any) pgx.Row {
 	return mock_db.RowFunc(tx.queryRow)
 }
 
-func (*saveFailureTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+func (tx *saveFailureTx) SendBatch(_ context.Context, batch *pgx.Batch) pgx.BatchResults {
+	return &saveFailureBatch{tx: tx, batch: batch}
 }
 
 func (tx *saveFailureTx) Commit(context.Context) error { return tx.commit() }
 
 func (tx *saveFailureTx) Rollback(context.Context) error { return tx.rollback() }
 
+type saveFailureBatch struct {
+	pgx.BatchResults
+	tx    *saveFailureTx
+	batch *pgx.Batch
+}
+
+func (b *saveFailureBatch) QueryRow() pgx.Row { return mock_db.RowFunc(b.tx.queryRow) }
+
+func (b *saveFailureBatch) Close() error {
+	if b.tx.batchErr != nil {
+		return b.tx.batchErr
+	}
+	for _, query := range b.batch.QueuedQueries {
+		if query.Fn != nil {
+			if err := query.Fn(b); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Inject errors that are difficult to induce with ordinary table constraints.
 // Real constraint failures and transaction atomicity are covered in PostgreSQL.
 func TestMessageStoreSaveErrors(t *testing.T) {
 	wantErr := errors.New("database failure")
-	for _, stage := range []string{"begin", "insert", "resolve", "resolve_missing", "sender", "commit"} {
+	for _, stage := range []string{"begin", "insert", "resolve", "resolve_missing", "batch", "sender", "sender_missing", "commit"} {
 		t.Run(stage, func(t *testing.T) {
 			database := mock_db.New(t)
 			begins, commits, rollbacks, queries := 0, 0, 0, 0
@@ -44,6 +66,9 @@ func TestMessageStoreSaveErrors(t *testing.T) {
 					queries++
 					if stage == "insert" || stage == "sender" && queries == 2 {
 						return wantErr
+					}
+					if stage == "sender_missing" && queries == 2 {
+						return pgx.ErrNoRows
 					}
 					if stage == "resolve" || stage == "resolve_missing" {
 						if queries == 1 || stage == "resolve_missing" {
@@ -65,6 +90,9 @@ func TestMessageStoreSaveErrors(t *testing.T) {
 					return nil
 				},
 			}
+			if stage == "batch" {
+				tx.batchErr = wantErr
+			}
 			database.BeginFunc = func(context.Context) (pgx.Tx, error) {
 				begins++
 				if stage == "begin" {
@@ -74,7 +102,7 @@ func TestMessageStoreSaveErrors(t *testing.T) {
 			}
 			saved, err := NewMessageStore(nil, database).Save(t.Context(), saveTestMessage("conversation"))
 			want := wantErr
-			if stage == "resolve_missing" {
+			if stage == "resolve_missing" || stage == "sender_missing" {
 				want = pgx.ErrNoRows
 			}
 			if saved != nil || !errors.Is(err, want) {

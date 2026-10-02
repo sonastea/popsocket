@@ -17,10 +17,12 @@ import (
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 )
 
-// Count SQL executions, including transaction control. A deferred Rollback on
-// an already closed transaction sends no SQL and is intentionally not counted.
+// Count SQL executions and driver calls, including transaction control; a batch
+// is one call with multiple SQL executions. Statement preparation and deferred
+// Rollback on an already closed transaction are intentionally not counted.
 type saveQueryCounts struct {
 	operations atomic.Int64
+	calls      atomic.Int64
 	begins     atomic.Int64
 	commits    atomic.Int64
 	rollbacks  atomic.Int64
@@ -28,6 +30,7 @@ type saveQueryCounts struct {
 
 func (c *saveQueryCounts) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	c.operations.Add(1)
+	c.calls.Add(1)
 	switch data.SQL {
 	case "begin":
 		c.begins.Add(1)
@@ -41,8 +44,20 @@ func (c *saveQueryCounts) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data
 
 func (*saveQueryCounts) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func (c *saveQueryCounts) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+	c.calls.Add(1)
+	return ctx
+}
+
+func (c *saveQueryCounts) TraceBatchQuery(context.Context, *pgx.Conn, pgx.TraceBatchQueryData) {
+	c.operations.Add(1)
+}
+
+func (*saveQueryCounts) TraceBatchEnd(context.Context, *pgx.Conn, pgx.TraceBatchEndData) {}
+
 func (c *saveQueryCounts) reset() {
 	c.operations.Store(0)
+	c.calls.Store(0)
 	c.begins.Store(0)
 	c.commits.Store(0)
 	c.rollbacks.Store(0)
@@ -327,6 +342,11 @@ func TestMessageStoreSavePostgresRollback(t *testing.T) {
 			code:  "23514",
 		},
 		{
+			name:  "batch_prepare",
+			setup: `ALTER TABLE "User" RENAME TO user_data`,
+			code:  "42P01",
+		},
+		{
 			name: "sender",
 			// FK references follow the renamed table. Only the sender lookup
 			// uses this failing view, after membership and message insertion.
@@ -392,4 +412,34 @@ func TestMessageStoreSavePostgresSenderFallback(t *testing.T) {
 		t.Fatalf("sender metadata = %q, %v", saved.GetFromUser(), saved.FromPhoto)
 	}
 	counts.assertTransactions(t, 1, 1, 0)
+}
+
+func TestMessageStoreSavePostgresMissingSender(t *testing.T) {
+	pool, counts := newSavePostgres(t)
+	// Preserve valid FK targets but make the batch's sender Scan return no rows
+	// after the inserts succeed. A callback error must still roll everything back.
+	if _, err := pool.Exec(t.Context(), `
+		ALTER TABLE "User" RENAME TO user_data;
+		CREATE VIEW "User" AS SELECT * FROM user_data WHERE false
+	`); err != nil {
+		t.Fatal(err)
+	}
+	store := NewMessageStore(nil, pool)
+	counts.reset()
+	saved, err := store.Save(t.Context(), saveTestMessage("conversation"))
+	if saved != nil || !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("Save = %v, %v; want nil, ErrNoRows", saved, err)
+	}
+	counts.assertTransactions(t, 1, 0, 1)
+	assertSaveRows(t, pool, 0, 0, 0)
+
+	if _, err := pool.Exec(t.Context(), `CREATE OR REPLACE VIEW "User" AS SELECT * FROM user_data`); err != nil {
+		t.Fatal(err)
+	}
+	counts.reset()
+	if _, err := store.Save(t.Context(), saveTestMessage("conversation")); err != nil {
+		t.Fatal(err)
+	}
+	counts.assertTransactions(t, 1, 1, 0)
+	assertSaveRows(t, pool, 1, 2, 1)
 }

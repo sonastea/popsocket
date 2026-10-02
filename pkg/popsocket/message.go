@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	ipc "github.com/sonastea/kpoppop-grpc/ipc/go"
 	"github.com/sonastea/popsocket/pkg/db"
 	"github.com/valkey-io/valkey-go"
@@ -233,30 +234,32 @@ func (ms *messageStore) Save(ctx context.Context, msg *ipc.Message) (*ipc.Messag
 		return nil, err
 	}
 
-	_, err = tx.Exec(ctx, `INSERT INTO "_ConversationToUser" ("A", "B") VALUES ($1, $2), ($1, $3)
+	// Once the conversation ID is resolved, batch the remaining ordered statements
+	// to avoid separate round trips. Close checks every result before COMMIT.
+	batch := &pgx.Batch{QueuedQueries: make([]*pgx.QueuedQuery, 0, 3)}
+	batch.Queue(`INSERT INTO "_ConversationToUser" ("A", "B") VALUES ($1, $2), ($1, $3)
 		ON CONFLICT DO NOTHING
 		`, convid, msg.From, msg.To)
-	if err != nil {
-		return nil, err
-	}
 
-	_, err = tx.Exec(ctx, `
+	batch.Queue(`
 		INSERT INTO "Message" ("convId", "recipientId","userId", content, "createdAt", "fromSelf", read)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		msg.Convid, msg.To, msg.From, msg.Content, msg.CreatedAt, msg.FromSelf, msg.Read)
-	if err != nil {
+
+	var displayName, photo, username *string
+	if !msg.FromSelf {
+		batch.Queue(`
+			SELECT displayname, photo, username
+			FROM "User" WHERE id = $1`, msg.From).QueryRow(func(row pgx.Row) error {
+			return row.Scan(&displayName, &photo, &username)
+		})
+	}
+
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 		return nil, err
 	}
 
 	if !msg.FromSelf {
-		var displayName, photo, username *string
-		err = tx.QueryRow(ctx, `
-			SELECT displayname, photo, username
-			FROM "User" WHERE id = $1`, msg.From).Scan(&displayName, &photo, &username)
-		if err != nil {
-			return nil, err
-		}
-
 		msg.FromPhoto = photo
 		msg.FromUser = displayName
 		if msg.FromUser == nil {

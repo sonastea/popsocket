@@ -132,6 +132,7 @@ func benchmarkSave(b *testing.B, workload string, parallel bool, deliver func(*i
 	ops := float64(sequence.Load())
 	b.ReportMetric(float64(latency.Load())/ops, "latency-ns/op")
 	b.ReportMetric(float64(counts.operations.Load())/ops, "db-ops/op")
+	b.ReportMetric(float64(counts.calls.Load())/ops, "db-calls/op")
 	b.ReportMetric(float64(counts.begins.Load())/ops, "tx/op")
 	b.ReportMetric(float64(counts.rollbacks.Load())/ops, "rollbacks/op")
 }

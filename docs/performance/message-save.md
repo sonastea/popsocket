@@ -1,5 +1,7 @@
 # Single-transaction message saves
 
+Follow-up: [Batching message-save statements](message-save-batching.md).
+
 ## Environment and method
 
 Measured on 2026-10-01: Go 1.27.1, macOS/arm64, Apple M1, PostgreSQL 18.1
